@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+date: Mon, 01 Dec 2025 06:31:34 GMT
+server: uvicorn
+content-length: 371
+content-type: application/json
+
+{"success":true,"message":"Optimizer initialized successfully","param_names":["formula","concentration","temperature","soak_time","ph","curing_time","metal_a_type","metal_a_concentration","metal_b_type","molar_ratio_b_a","experiment_condition"],"bounds":[[1.0,1.0,25.0,1.0,2.0,10.0,1.0,10.0,0.0,1.0,1.0],[21.0,10.0,40.0,30.0,14.0,30.0,20.0,50.0,20.0,10.0,3.0]],"phase":1}
