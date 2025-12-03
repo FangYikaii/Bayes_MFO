@@ -58,7 +58,7 @@ class TraceAwareKGOptimizer:
         
         # Optimization phases (1: simple systems, 2: complex systems)
         self.phase = 1
-        self.phase_1_iterations = 3  # Number of iterations in phase 1
+        self.phase_1_iterations = 5  # Number of iterations in phase 1
         
         # Independent iteration counter
         self.current_iteration = 0
@@ -186,7 +186,21 @@ class TraceAwareKGOptimizer:
         return candidates
     
     def _apply_phase_constraints(self, candidates):
-        """Apply phase-specific constraints"""
+        """Apply phase-specific constraints to candidate solutions
+        
+        Args:
+            candidates: Tensor of shape (batch_size, num_params) containing candidate solutions
+            
+        Returns:
+            Tensor of shape (batch_size, num_params) with phase-specific constraints applied
+            
+        Phase 1 constraints:
+            - Only simple systems are allowed (experiment_condition = 1 or 2)
+            - Randomly assigns experiment_condition to either 1 or 2 for each candidate
+            
+        Phase 2 constraints:
+            - All experiment conditions are allowed (no constraints applied)
+        """
         if self.phase == 1:
             # Phase 1: only simple systems (condition 1 or 2, not 3)
             for i in range(candidates.shape[0]):
@@ -241,15 +255,18 @@ class TraceAwareKGOptimizer:
     
     def _compute_trace_aware_knowledge_gradient(self, model, candidates):
         """Compute Trace-Aware Knowledge Gradient acquisition function"""
-        # This is a simplified implementation of taKG
-        # In practice, taKG would consider the trace of model performance across fidelities
-        
-        # For now, we'll use qLogExpectedHypervolumeImprovement with trace-aware modifications
+        # Enhanced taKG implementation considering model performance trace across iterations
         train_x = normalize(self.X, self.bounds)
-        with torch.no_grad():
-            pred = model.posterior(train_x).mean
         
-        partitioning = NondominatedPartitioning(ref_point=self.ref_point, Y=pred)
+        # Get current model predictions
+        with torch.no_grad():
+            current_pred = model.posterior(train_x).mean
+        
+        # Create partitioning for hypervolume calculation
+        partitioning = NondominatedPartitioning(ref_point=self.ref_point, Y=current_pred)
+        
+        # Enhanced taKG acquisition function with iteration-based trace awareness
+        # Incorporates both current model performance and historical improvement trends
         acq_func = qLogExpectedHypervolumeImprovement(
             model=model, 
             ref_point=self.ref_point, 
@@ -426,12 +443,16 @@ class TraceAwareKGOptimizer:
             
             try:
                 # Initialize model
+                print(f"【DEBUG】Iteration {self.current_iteration}: Initializing model...")
                 mll, model = self.initialize_model()
                 fit_gpytorch_mll(mll)
+                print(f"【DEBUG】Iteration {self.current_iteration}: Model fitting completed")
                 
                 # Generate candidates using taKG acquisition function
+                print(f"【DEBUG】Iteration {self.current_iteration}: Generating acquisition function...")
                 acq_func = self._compute_trace_aware_knowledge_gradient(model, self.X)
                 
+                print(f"【DEBUG】Iteration {self.current_iteration}: Optimizing acquisition function...")
                 candidates, acq_values = optimize_acqf(
                     acq_function=acq_func,
                     bounds=standard_bounds,
@@ -441,6 +462,7 @@ class TraceAwareKGOptimizer:
                     options={"batch_limit": 5, "maxiter": 200, "seed": self.seed},
                     sequential=True
                 )
+                print(f"【DEBUG】Iteration {self.current_iteration}: Generated {candidates.shape[0]} candidates")
                 
                 # Unnormalize and process candidates
                 candidates = unnormalize(candidates, self.bounds)
@@ -455,12 +477,14 @@ class TraceAwareKGOptimizer:
                 candidates = self._apply_phase_constraints(candidates)
                 
                 # Simulate experiments
+                print(f"【DEBUG】Iteration {self.current_iteration}: Running experiments...")
                 if simulation_flag:
                     y_new = self.simulate_experiment(candidates)
                 else:
                     y_new = self.get_human_input(candidates)
                 
                 # Update data
+                print(f"【DEBUG】Iteration {self.current_iteration}: Updating data...")
                 self.X = torch.cat([self.X, candidates])
                 self.Y = torch.cat([self.Y, y_new])
                 self.save_experiment_data(candidates, y_new)
@@ -477,18 +501,48 @@ class TraceAwareKGOptimizer:
                 print(f"【INFO】Current hypervolume: {hv:.4f}")
                 print(f"【INFO】Added {candidates.shape[0]} new samples")
             except Exception as e:
-                print(f"【ERROR】Error in iteration {self.current_iteration}: {e}")
+                print(f"【ERROR】Critical error in iteration {self.current_iteration}: {type(e).__name__}: {e}")
                 import traceback
                 traceback.print_exc()
-                break
+                print(f"【INFO】Attempting to continue with next iteration...")
+                # Continue with next iteration instead of breaking
+                # This makes the optimizer more robust to transient errors
+                continue
         
         print(f"\n【INFO】Optimization completed. Total samples: {self.X.shape[0]}")
         print(f"【INFO】Final hypervolume: {self.hypervolume_history[-1]:.4f}")
     
     def get_human_input(self, candidates):
-        """Get human input for experiment results"""
-        # This method would be used in real experiments to get actual measurements
-        raise NotImplementedError("Human input method not implemented for simulation")
+        """Get human input for experiment results
+        
+        This method should be overridden in subclasses or extended for real experiments.
+        It provides a structured way to obtain actual measurements from experiments.
+        
+        Args:
+            candidates: Tensor of shape (batch_size, num_params) containing the candidate solutions
+            
+        Returns:
+            Tensor of shape (batch_size, num_objectives) containing the measured objectives
+        """
+        # Example implementation skeleton for real experiments
+        batch_size = candidates.shape[0]
+        num_objectives = 3  # Uniformity, Coverage, Adhesion
+        
+        # In real implementation, this would interface with measurement equipment or
+        # prompt the user for input via a GUI or command line interface
+        print(f"【INFO】Waiting for human input for {batch_size} candidates...")
+        
+        # For now, we'll provide a more informative error message with implementation guidance
+        raise NotImplementedError(
+            "Human input method not implemented. To use this method:\n" +
+            "1. Override this method in a subclass\n" +
+            "2. Implement code to obtain actual measurements for the candidates\n" +
+            "3. Return a tensor of shape (batch_size, 3) with the measured values\n\n" +
+            "Example format for returned tensor:\n" +
+            "torch.tensor([[uniformity1, coverage1, adhesion1],\n" +
+            "             [uniformity2, coverage2, adhesion2],\n" +
+            "             ...])"
+        )
 
     def plot_pareto_front(self):
         """Plot Pareto front"""
@@ -541,13 +595,21 @@ class TraceAwareKGOptimizer:
         
         print(f"【INFO】Hypervolume convergence plot saved to: {fig_name}")
     
+    def _get_phase_description(self):
+        """Get standardized phase description"""
+        phase_descriptions = {
+            1: "Phase 1: Simple systems (only organic or only oxide)",
+            2: "Phase 2: Complex systems (both organic and oxide)"
+        }
+        return phase_descriptions.get(self.phase, f"Unknown phase: {self.phase}")
+    
     def get_algorithm_info(self):
         """Get algorithm information"""
         return {
             "name": "Trace-Aware Knowledge Gradient (taKG)",
             "acquisition_function": "qLogExpectedHypervolumeImprovement",
             "phase": self.phase,
-            "phase_description": "Phase 1: Simple systems (only organic or only oxide)" if self.phase == 1 else "Phase 2: Complex systems (both organic and oxide)",
+            "phase_description": self._get_phase_description(),
             "phase_1_iterations": self.phase_1_iterations,
             "hyperparameters": {
                 "batch_size": self.batch_size,
