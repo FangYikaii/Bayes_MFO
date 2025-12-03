@@ -489,114 +489,7 @@ class TraceAwareKGOptimizer:
         """Get human input for experiment results"""
         # This method would be used in real experiments to get actual measurements
         raise NotImplementedError("Human input method not implemented for simulation")
-    
-    def optimize_step(self, simulation_flag=True):
-        """Run a single optimization iteration"""
-        self._set_seed(self.seed)
-        
-        # Check if initial samples have been generated
-        if self.X.shape[0] == 0:
-            # Generate initial samples
-            X_init = self.generate_initial_samples()
-            print(f"【INFO】Generated {X_init.shape[0]} initial samples")
-            
-            # Initial experiments
-            print("=== Initial Experiments ===")
-            for candidate in X_init:
-                candidate = candidate.unsqueeze(0)
-                
-                if simulation_flag:
-                    y = self.simulate_experiment(candidate)
-                else:
-                    y = self.get_human_input(candidate)
-                
-                self.X = torch.cat([self.X, candidate])
-                self.Y = torch.cat([self.Y, y])
-                self.save_experiment_data(candidate, y)
-            
-            # Record initial iteration, but don't increment current_iteration
-            self._record_iteration(iteration=0, candidates=X_init)
-            return {"iteration": 0, "phase": self.phase, "is_initial": True}
-        
-        # Main optimization iteration
-        self.current_iteration += 1
-        print(f"\n【INFO】Iteration {self.current_iteration}, Phase {self.phase}")
-        
-        # Check if we need to transition to phase 2
-        if self.phase == 1 and self.current_iteration > self.phase_1_iterations:
-            self.phase = 2
-            print("【INFO】Transitioning to Phase 2: Complex systems enabled")
-        
-        standard_bounds = torch.zeros_like(self.bounds, device=self.device)
-        standard_bounds[1, :] = 1.0
-        
-        try:
-            # Initialize model
-            mll, model = self.initialize_model()
-            fit_gpytorch_mll(mll)
-            
-            # Generate candidates using taKG acquisition function
-            acq_func = self._compute_trace_aware_knowledge_gradient(model, self.X)
-            
-            candidates, acq_values = optimize_acqf(
-                acq_function=acq_func,
-                bounds=standard_bounds,
-                q=self.batch_size,
-                num_restarts=self.num_restarts,
-                raw_samples=self.raw_samples,
-                options={"batch_limit": 5, "maxiter": 200, "seed": self.seed},
-                sequential=True
-            )
-            
-            # Unnormalize and process candidates
-            candidates = unnormalize(candidates, self.bounds)
-            
-            # Discretization
-            for j in range(len(self.parameters)):
-                candidates[:, j] = torch.round(candidates[:, j] / self.steps[j]) * self.steps[j]
-                candidates[:, j] = torch.clamp(candidates[:, j], self.bounds[0, j], self.bounds[1, j])
-            
-            # Apply constraints
-            candidates = self._apply_safety_constraints(candidates)
-            candidates = self._apply_phase_constraints(candidates)
-            
-            # Simulate experiments
-            if simulation_flag:
-                y_new = self.simulate_experiment(candidates)
-            else:
-                y_new = self.get_human_input(candidates)
-            
-            # Update data
-            self.X = torch.cat([self.X, candidates])
-            self.Y = torch.cat([self.Y, y_new])
-            self.save_experiment_data(candidates, y_new)
-            
-            # Record iteration
-            self._record_iteration(
-                iteration=self.current_iteration,
-                candidates=candidates,
-                acquisition_values=acq_values,
-            )
-            
-            # Compute hypervolume
-            hv = self._compute_hypervolume()
-            print(f"【INFO】Current hypervolume: {hv:.4f}")
-            print(f"【INFO】Added {candidates.shape[0]} new samples")
-            
-            return {
-                "iteration": self.current_iteration,
-                "phase": self.phase,
-                "is_initial": False,
-                "hypervolume": hv,
-                "candidates": candidates,
-                "acquisition_values": acq_values
-            }
-        except Exception as e:
-            print(f"【ERROR】Error in iteration {self.current_iteration}: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    
+
     def plot_pareto_front(self):
         """Plot Pareto front"""
         objectives = self.Y.cpu().numpy()
@@ -631,8 +524,8 @@ class TraceAwareKGOptimizer:
         
         print(f"【INFO】Pareto front plot saved to: {fig_name}")
     
-    def plot_convergence(self):
-        """Plot convergence history"""
+    def plot_hypervolume_convergence(self):
+        """Plot hypervolume convergence history"""
         fig, ax = plt.subplots(figsize=(10, 6))
         ax.plot(range(len(self.hypervolume_history)), self.hypervolume_history, 'b-', marker='o', label='Hypervolume')
         ax.set_xlabel('Iteration')
@@ -642,11 +535,11 @@ class TraceAwareKGOptimizer:
         ax.legend()
         
         # Save figure
-        fig_name = f"{self.fig_dir}/tkg_convergence_{self.experiment_id}.png"
+        fig_name = f"{self.fig_dir}/tkg_hypervolume_convergence_{self.experiment_id}.png"
         plt.savefig(fig_name, dpi=300, bbox_inches='tight')
         plt.close(fig)
         
-        print(f"【INFO】Convergence plot saved to: {fig_name}")
+        print(f"【INFO】Hypervolume convergence plot saved to: {fig_name}")
     
     def get_algorithm_info(self):
         """Get algorithm information"""

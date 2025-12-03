@@ -119,10 +119,10 @@ async def optimize(request: OptimizeRequest):
             if result.stderr:
                 print(f"【WARNING】Visualization script warnings: {result.stderr}")
             
-            # 调用plot_pareto_front和plot_convergence生成最终图片
-            print("【INFO】Generating final Pareto front and convergence plots...")
+            # 调用plot_pareto_front和plot_hypervolume_convergence生成最终图片
+            print("【INFO】Generating final Pareto front and hypervolume convergence plots...")
             global_optimizer.plot_pareto_front()
-            global_optimizer.plot_convergence()
+            global_optimizer.plot_hypervolume_convergence()
             
             print("【INFO】Visualization generation completed successfully")
         except Exception as e:
@@ -142,78 +142,6 @@ async def optimize(request: OptimizeRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
-    finally:
-        # 释放运行状态锁
-        global_optimizer_running = False
-
-# 定义单次迭代请求体模型
-class OptimizeStepRequest(BaseModel):
-    simulation_flag: bool = True
-
-# 运行单次优化迭代
-@app.post("/api/optimize/step")
-async def optimize_step(request: OptimizeStepRequest):
-    """运行单次优化迭代"""
-    global global_optimizer, global_optimizer_running
-    if global_optimizer is None:
-        raise HTTPException(status_code=400, detail="Optimizer not initialized")
-    
-    # 检查优化器是否正在运行
-    if global_optimizer_running:
-        raise HTTPException(status_code=400, detail="Optimizer is already running")
-    
-    try:
-        # 设置运行状态锁
-        global_optimizer_running = True
-        
-        # 调用优化器的optimize_step方法执行单次迭代
-        step_result = global_optimizer.optimize_step(simulation_flag=request.simulation_flag)
-        
-        # 获取结果
-        pareto_x, pareto_y = global_optimizer.get_pareto_front()
-        hv = global_optimizer._compute_hypervolume()
-        
-        # 获取实验统计信息
-        experiment_stats = global_optimizer.get_experiment_stats()
-        
-        # 转换phase为前端期望的字符串格式
-        phase_map = {
-            1: "OXIDE ONLY",
-            2: "ORGANIC OPTIMIZATION",
-            3: "HYBRID GLOBAL SEARCH"
-        }
-        phase_str = phase_map.get(global_optimizer.phase, f"Phase {global_optimizer.phase}")
-        
-        # 计算多目标结果
-        max_adhesion = float(experiment_stats["objectives"]["adhesion"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        max_uniformity = float(experiment_stats["objectives"]["uniformity"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        max_coverage = float(experiment_stats["objectives"]["coverage"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        
-        return {
-            "success": True,
-            "message": f"Iteration {step_result['iteration']} completed",
-            "iteration": step_result['iteration'],
-            "total_samples": global_optimizer.X.shape[0],
-            "current_hypervolume": hv,
-            "phase": phase_str,
-            "phase_number": step_result['phase'],
-            "is_initial": step_result.get('is_initial', False),
-            "pareto_front": {
-                "X": pareto_x.cpu().numpy().tolist(),
-                "Y": pareto_y.cpu().numpy().tolist()
-            },
-            "iteration_result": global_optimizer.iteration_history[-1],
-            "hypervolume_history": global_optimizer.hypervolume_history,
-            "multi_objective_results": {
-                "max_adhesion": max_adhesion,
-                "max_uniformity": max_uniformity,
-                "max_coverage": max_coverage,
-                "hypervolume": hv
-            },
-            "experiment_stats": experiment_stats
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Optimization step failed: {str(e)}")
     finally:
         # 释放运行状态锁
         global_optimizer_running = False

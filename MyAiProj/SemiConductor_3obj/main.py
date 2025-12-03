@@ -9,7 +9,7 @@ def main(n_iter):
     optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42)
     optimizer.optimize(n_iter=n_iter, simulation_flag=True)
     optimizer.plot_pareto_front()
-    optimizer.plot_convergence()
+    optimizer.plot_hypervolume_convergence()
 
     print(f"Done!")
 
