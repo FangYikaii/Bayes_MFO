@@ -33,23 +33,33 @@ class TraceAwareKGOptimizer:
         self.output_dir = output_dir
         self.fig_dir = fig_dir
         self.experiment_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.device = device if device is not None else torch.device('cpu')
+        # Set device: use GPU if available and not specified, otherwise use CPU
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            if torch.cuda.is_available():
+                print(f"【INFO】CUDA is available, using GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                print("【INFO】CUDA is not available, using CPU")
+        else:
+            self.device = torch.device(device)
+            if 'cuda' in device:
+                print(f"【INFO】Using specified GPU device: {device}")
         
         # Define parameter spaces based on user requirements
         self._define_parameter_spaces()
         
-        # Store experiment data
+        # Store experiment data on the specified device
         self.X = torch.empty((0, len(self.param_names)), dtype=torch.float64, device=self.device)
         self.Y = torch.empty((0, 3), dtype=torch.float64, device=self.device)  # Three objectives: uniformity, coverage, adhesion
         self.history = pd.DataFrame(columns=self.param_names + ["Uniformity", "Coverage", "Adhesion", "Timestamp"])
         
-        # Multi-objective optimization settings
+        # Multi-objective optimization settings on the specified device
         self.ref_point = torch.tensor([-0.1, -0.1, -0.1], dtype=torch.float64, device=self.device)
         
         # Optimization hyperparameters
         self.num_restarts = 5  # Reduced from 20 to speed up computation
         self.raw_samples = 16  # Reduced from 64 to speed up computation
-        self.batch_size = 3  # Reduced from 10 to speed up computation
+        self.batch_size = 5  # Reduced from 10 to speed up computation
         self.n_init = 5
         
         # Record lists
@@ -58,10 +68,14 @@ class TraceAwareKGOptimizer:
         
         # Optimization phases (1: simple systems, 2: complex systems)
         self.phase = 1
-        self.phase_1_iterations = 5  # Number of iterations in phase 1
+        self.phase_1_iterations = 10  # Number of iterations in phase 1
         
         # Independent iteration counter
         self.current_iteration = 0
+        
+        # Cache for hypervolume computation
+        self._cached_hv = None
+        self._cached_hv_iteration = -1
         
         self.seed = seed
         self._set_seed(seed)
@@ -74,20 +88,20 @@ class TraceAwareKGOptimizer:
         """Define parameter spaces based on user requirements"""
         # Organic formula parameters
         self.organic_params = {
-            'formula': (1, 30, 1),          # 1-30, step 1
-            'concentration': (0.1, 5, 0.1),  # 0.1-5%, step 0.1
-            'temperature': (25, 40, 5),      # 25-40°C, step 5
-            'soak_time': (1, 30, 1),         # 1-30min, step 1
-            'ph': (2.0, 14.0, 0.5),          # 2.0-14.0, step 0.5 (with safety constraints)
-            'curing_time': (10, 30, 5)       # 10-30min, step 5
+            'organic_formula': (1, 30, 1),          # 1-30, step 1
+            'organic_concentration': (0.1, 5, 0.1),  # 0.1-5%, step 0.1
+            'organic_temperature': (25, 40, 5),      # 25-40°C, step 5
+            'organic_soak_time': (1, 30, 1),         # 1-30min, step 1
+            'organic_ph': (2.0, 14.0, 0.5),          # 2.0-14.0, step 0.5 (with safety constraints)
+            'organic_curing_time': (10, 30, 5)       # 10-30min, step 5
         }
         
         # Metal oxide parameters
-        self.oxide_params = {
+        self.metal_params = {
             'metal_a_type': (1, 20, 1),      # 1-20, step 1
             'metal_a_concentration': (10, 50, 10),  # 10-50%, step 10
             'metal_b_type': (0, 20, 1),      # 0-20, step 1 (0 means no metal B)
-            'molar_ratio_b_a': (1, 10, 1)    # 1-10%, step 1
+            'metal_molar_ratio_b_a': (1, 10, 1)    # 1-10%, step 1
         }
         
         # Experiment condition parameter
@@ -96,16 +110,16 @@ class TraceAwareKGOptimizer:
         }
         
         # Combine all parameters
-        self.parameters = {**self.organic_params, **self.oxide_params, **self.condition_params}
+        self.parameters = {**self.organic_params, **self.metal_params, **self.condition_params}
         self.param_names = list(self.parameters.keys())
         
-        # Parameter bounds
+        # Parameter bounds on the specified device
         self.bounds = torch.tensor([
             [param[0] for param in self.parameters.values()],
             [param[1] for param in self.parameters.values()]
         ], dtype=torch.float64, device=self.device)
         
-        # Parameter steps for discretization
+        # Parameter steps for discretization on the specified device
         self.steps = torch.tensor([param[2] for param in self.parameters.values()], device=self.device)
         
         # Safety constraints for pH based on formula ID
@@ -163,25 +177,38 @@ class TraceAwareKGOptimizer:
         torch.backends.cudnn.benchmark = False
     
     def _apply_safety_constraints(self, candidates):
-        """Apply safety constraints to candidates"""
-        for i in range(candidates.shape[0]):
-            formula_id = int(round(candidates[i, 0].item()))
-            
-            # Apply pH safety constraints based on formula ID
-            if formula_id in self.pH_safety_constraints:
-                min_ph, max_ph = self.pH_safety_constraints[formula_id]
-                candidates[i, 4] = torch.clamp(candidates[i, 4], min_ph, max_ph)
-            
-            # Apply metal oxide constraints: metal A and B cannot be the same type
-            metal_a_type = int(round(candidates[i, 6].item()))
-            metal_b_type = int(round(candidates[i, 8].item()))
-            if metal_b_type != 0 and metal_a_type == metal_b_type:
-                # If same, adjust metal B type to a different value
-                candidates[i, 8] = torch.clamp(
-                    candidates[i, 8] + 1 if candidates[i, 8] < self.bounds[1, 8] else candidates[i, 8] - 1,
-                    self.bounds[0, 8], 
-                    self.bounds[1, 8]
-                )
+        """Apply safety constraints to candidates with vectorized operations for improved efficiency"""
+        batch_size = candidates.shape[0]
+        
+        # Vectorized formula ID extraction
+        formula_ids = torch.round(candidates[:, 0]).int()
+        
+        # Vectorized pH safety constraints
+        for formula_id in torch.unique(formula_ids):
+            mask = formula_ids == formula_id
+            if formula_id.item() in self.pH_safety_constraints:
+                min_ph, max_ph = self.pH_safety_constraints[formula_id.item()]
+                candidates[mask, 4] = torch.clamp(candidates[mask, 4], min_ph, max_ph)
+        
+        # Vectorized metal oxide constraints
+        metal_a_types = torch.round(candidates[:, 6]).int()
+        metal_b_types = torch.round(candidates[:, 8]).int()
+        
+        # Find candidates where metal B is not 0 and metal A and B types are the same
+        conflict_mask = (metal_b_types != 0) & (metal_a_types == metal_b_types)
+        
+        if conflict_mask.any():
+            # Adjust metal B type for conflicting candidates
+            adjustment = torch.where(
+                candidates[conflict_mask, 8] < self.bounds[1, 8],
+                candidates[conflict_mask, 8] + 1,
+                candidates[conflict_mask, 8] - 1
+            )
+            candidates[conflict_mask, 8] = torch.clamp(
+                adjustment,
+                self.bounds[0, 8], 
+                self.bounds[1, 8]
+            )
         
         return candidates
     
@@ -227,33 +254,63 @@ class TraceAwareKGOptimizer:
         return sobel_samples
     
     def initialize_model(self):
-        """Initialize GP models for each objective"""
+        """Initialize GP models for each objective with optimized configuration"""
         train_x = normalize(self.X, self.bounds)
         
-        # Create separate GP for each objective
-        gp1 = SingleTaskGP(
-            train_x,
-            self.Y[:, 0:1],
-            outcome_transform=Standardize(m=1),
-        ).to(self.device)
+        # Create GP models with optimized configuration
+        # Using shared kernel configuration for consistency
+        gp_models = []
+        for i in range(3):
+            # Create and move GP model to the specified device
+            gp = SingleTaskGP(
+                train_x,
+                self.Y[:, i:i+1],
+                outcome_transform=Standardize(m=1),
+            ).to(self.device)
+            gp_models.append(gp)
         
-        gp2 = SingleTaskGP(
-            train_x,
-            self.Y[:, 1:2],
-            outcome_transform=Standardize(m=1),
-        ).to(self.device)
+        # Combine models and ensure they're on the correct device
+        model = ModelListGP(*gp_models).to(self.device)
+        mll = SumMarginalLogLikelihood(model.likelihood, model).to(self.device)
         
-        gp3 = SingleTaskGP(
-            train_x,
-            self.Y[:, 2:3],
-            outcome_transform=Standardize(m=1),
-        ).to(self.device)
+        # Explicitly move all model components to the device
+        for component in model.models:
+            component.to(self.device)
         
-        model = ModelListGP(gp1, gp2, gp3).to(self.device)
-        mll = SumMarginalLogLikelihood(model.likelihood, model)
         return mll, model
     
-    def _compute_trace_aware_knowledge_gradient(self, model, candidates):
+    def _process_observed_values(self, y):
+        """Process observed values to handle saturated objectives and prevent local optima
+        
+        Args:
+            y: Tensor of shape (batch_size, 3) containing observed objectives
+            
+        Returns:
+            Tensor of shape (batch_size, 3) with processed objectives
+        """
+        processed_y = y.clone()
+        
+        # For each objective, check if it's approaching saturation
+        for i, obj_name in enumerate(["Uniformity", "Coverage", "Adhesion"]):
+            # Check if any sample in the batch has a very high value for this objective
+            for batch_idx in range(y.shape[0]):
+                if y[batch_idx, i] > 0.9:
+                    print(f"【INFO】Detected saturated {obj_name} value: {y[batch_idx, i]:.4f}, adding exploration encouragement")
+                    
+                    # Add a small amount of noise to prevent perfect values from dominating
+                    noise = torch.randn(1, device=y.device) * 0.05
+                    processed_y[batch_idx, i] = y[batch_idx, i] + noise
+                    
+                    # Clip to ensure we stay within valid range
+                    processed_y[batch_idx, i] = torch.clamp(processed_y[batch_idx, i], 0.0, 1.0)
+                    
+                    # Increase weight on other objectives by slightly penalizing this one
+                    # This encourages exploration of other dimensions
+                    processed_y[batch_idx, i] *= 0.95
+        
+        return processed_y
+    
+    def _compute_trace_aware_knowledge_gradient(self, model):
         """Compute Trace-Aware Knowledge Gradient acquisition function"""
         # Enhanced taKG implementation considering model performance trace across iterations
         train_x = normalize(self.X, self.bounds)
@@ -262,14 +319,25 @@ class TraceAwareKGOptimizer:
         with torch.no_grad():
             current_pred = model.posterior(train_x).mean
         
-        # Create partitioning for hypervolume calculation
-        partitioning = NondominatedPartitioning(ref_point=self.ref_point, Y=current_pred)
+        # Dynamic reference point adjustment to handle saturated objectives
+        # When any objective approaches saturation (e.g., coverage > 0.9), adjust reference point to encourage balance
+        dynamic_ref = self.ref_point.clone()
+        
+        # Check if any objective is approaching saturation
+        for i, obj_name in enumerate(["Uniformity", "Coverage", "Adhesion"]):
+            if self.Y[:, i].max() > 0.9:
+                # Increase the reference point for saturated objectives to focus on other objectives
+                dynamic_ref[i] = 0.5
+                print(f"【INFO】Objective {obj_name} is approaching saturation, adjusting reference point to {dynamic_ref[i]:.2f}")
+        
+        # Create partitioning for hypervolume calculation with dynamic reference point
+        partitioning = NondominatedPartitioning(ref_point=dynamic_ref, Y=current_pred)
         
         # Enhanced taKG acquisition function with iteration-based trace awareness
         # Incorporates both current model performance and historical improvement trends
         acq_func = qLogExpectedHypervolumeImprovement(
             model=model, 
-            ref_point=self.ref_point, 
+            ref_point=dynamic_ref, 
             partitioning=partitioning
         )
         
@@ -280,39 +348,39 @@ class TraceAwareKGOptimizer:
         if len(x.shape) != 2:
             raise ValueError(f"Candidates must be 2D tensor, got shape {x.shape}")
         
-        # Extract parameters
-        formula = x[:, 0]
-        concentration = x[:, 1]
-        temperature = x[:, 2]
-        soak_time = x[:, 3]
-        ph = x[:, 4]
-        curing_time = x[:, 5]
+        # Extract parameters with updated naming convention
+        organic_formula = x[:, 0]
+        organic_concentration = x[:, 1]
+        organic_temperature = x[:, 2]
+        organic_soak_time = x[:, 3]
+        organic_ph = x[:, 4]
+        organic_curing_time = x[:, 5]
         metal_a_type = x[:, 6]
         metal_a_concentration = x[:, 7]
         metal_b_type = x[:, 8]
-        molar_ratio = x[:, 9]
+        metal_molar_ratio_b_a = x[:, 9]
         condition = x[:, 10]
         
-        # Simulate uniformity (0-1)
-        uniformity = (0.3 + 0.02 * formula + 0.05 * concentration + 0.01 * temperature + 0.01 * soak_time + 0.02 * ph + 0.01 * curing_time)
-        uniformity += 0.1 * torch.sin(formula + concentration + temperature)
+        # Simulate uniformity (0-1) - Scaled coefficients to avoid saturation
+        uniformity = (0.3 + 0.006 * organic_formula + 0.015 * organic_concentration + 0.003 * organic_temperature + 0.003 * organic_soak_time + 0.006 * organic_ph + 0.003 * organic_curing_time)
+        uniformity += 0.1 * torch.sin(organic_formula + organic_concentration + organic_temperature)
         
-        # Simulate coverage (0-1)
-        coverage = (0.4 + 0.03 * formula + 0.04 * concentration + 0.02 * temperature + 0.02 * soak_time + 0.01 * ph + 0.01 * curing_time)
-        coverage += 0.15 * torch.cos(temperature + ph + curing_time)
+        # Simulate coverage (0-1) - Scaled coefficients to avoid saturation
+        coverage = (0.3 + 0.009 * organic_formula + 0.012 * organic_concentration + 0.006 * organic_temperature + 0.006 * organic_soak_time + 0.003 * organic_ph + 0.003 * organic_curing_time)
+        coverage += 0.15 * torch.cos(organic_temperature + organic_ph + organic_curing_time)
         
-        # Simulate adhesion (0-1)
-        adhesion = (0.35 + 0.02 * formula + 0.03 * concentration + 0.02 * temperature + 0.01 * soak_time + 0.02 * ph + 0.01 * curing_time)
-        adhesion += 0.1 * torch.sin(soak_time + ph + curing_time)
+        # Simulate adhesion (0-1) - Scaled coefficients to avoid saturation
+        adhesion = (0.3 + 0.006 * organic_formula + 0.009 * organic_concentration + 0.006 * organic_temperature + 0.003 * organic_soak_time + 0.006 * organic_ph + 0.003 * organic_curing_time)
+        adhesion += 0.1 * torch.sin(organic_soak_time + organic_ph + organic_curing_time)
         
-        # Add metal oxide effects
-        oxide_effect = 0.1 * (metal_a_concentration / 50.0) * (1.0 + 0.5 * (1.0 - torch.abs(metal_a_type - metal_b_type) / 20.0))
+        # Add metal oxide effects - Reduced impact
+        oxide_effect = 0.08 * (metal_a_concentration / 50.0) * (1.0 + 0.5 * (1.0 - torch.abs(metal_a_type - metal_b_type) / 20.0))
         uniformity += oxide_effect * 0.1
         coverage += oxide_effect * 0.15
         adhesion += oxide_effect * 0.2
         
-        # Apply condition effects
-        condition_effect = torch.where(condition == 3, 0.1, 0.0)  # Condition 3 (both) gets a bonus
+        # Apply condition effects - Reduced bonus
+        condition_effect = torch.where(condition == 3, 0.05, 0.0)  # Condition 3 (both) gets a smaller bonus
         uniformity += condition_effect
         coverage += condition_effect
         adhesion += condition_effect
@@ -322,19 +390,39 @@ class TraceAwareKGOptimizer:
         coverage = torch.clamp(coverage, 0.0, 1.0).unsqueeze(1)
         adhesion = torch.clamp(adhesion, 0.0, 1.0).unsqueeze(1)
         
-        # Avoid local optima: if coverage is too high, add some noise
+        # Avoid local optima: if any objective is too high, add some noise
         for i in range(coverage.shape[0]):
+            # Add noise if uniformity is too high
+            if uniformity[i, 0] > 0.95:
+                uniformity[i, 0] -= torch.rand(()) * 0.08
+                coverage[i, 0] += torch.rand(()) * 0.04
+            
+            # Add noise if coverage is too high
             if coverage[i, 0] > 0.95:
-                # Add small noise to prevent getting stuck
-                coverage[i, 0] -= torch.rand(()) * 0.1
-                adhesion[i, 0] += torch.rand(()) * 0.1
+                coverage[i, 0] -= torch.rand(()) * 0.08
+                adhesion[i, 0] += torch.rand(()) * 0.04
+            
+            # Add noise if adhesion is too high
+            if adhesion[i, 0] > 0.95:
+                adhesion[i, 0] -= torch.rand(()) * 0.08
+                uniformity[i, 0] += torch.rand(()) * 0.04
         
         return torch.cat([uniformity, coverage, adhesion], dim=-1).to(self.device)
     
     def _compute_hypervolume(self):
-        """Compute hypervolume"""
+        """Compute hypervolume with caching for improved efficiency"""
+        # Use cached value if no new iteration has occurred
+        if self._cached_hv is not None and self._cached_hv_iteration == self.current_iteration:
+            return self._cached_hv
+        
         partitioning = NondominatedPartitioning(ref_point=self.ref_point, Y=self.Y)
-        return partitioning.compute_hypervolume().item()
+        hv = partitioning.compute_hypervolume().item()
+        
+        # Cache the result for future use
+        self._cached_hv = hv
+        self._cached_hv_iteration = self.current_iteration
+        
+        return hv
     
     def _save_iteration_data(self, record):
         """Save iteration data"""
@@ -420,14 +508,18 @@ class TraceAwareKGOptimizer:
                 # In real scenario, get human input
                 y = self.get_human_input(candidate)
             
+            # Process observed values to handle saturated objectives
+            y_processed = self._process_observed_values(y)
+            
             self.X = torch.cat([self.X, candidate])
-            self.Y = torch.cat([self.Y, y])
-            self.save_experiment_data(candidate, y)
+            self.Y = torch.cat([self.Y, y_processed])
+            self.save_experiment_data(candidate, y)  # Save original values for record keeping
         
         self._record_iteration(iteration=0, candidates=X_init)
         
         # Main optimization loop
         print("=== Optimization Phase ===")
+        # Create standard bounds on the specified device
         standard_bounds = torch.zeros_like(self.bounds, device=self.device)
         standard_bounds[1, :] = 1.0
         
@@ -437,9 +529,18 @@ class TraceAwareKGOptimizer:
             print(f"\n【INFO】Iteration {self.current_iteration}/{n_iter}, Phase {self.phase}")
             
             # Check if we need to transition to phase 2
-            if self.phase == 1 and self.current_iteration > self.phase_1_iterations:
-                self.phase = 2
-                print("【INFO】Transitioning to Phase 2: Complex systems enabled")
+            if self.phase == 1:
+                if self.current_iteration > 1:
+                    # Compute hypervolume improvement rate
+                    hv_improvement = (self.hypervolume_history[-1] - self.hypervolume_history[-2]) / self.hypervolume_history[-2]
+                    # Transition to phase 2 if improvement rate is low or maximum phase 1 iterations reached
+                    if hv_improvement < 0.05 or self.current_iteration > self.phase_1_iterations:
+                        self.phase = 2
+                        print("【INFO】Transitioning to Phase 2: Complex systems enabled")
+                        print(f"【INFO】Phase transition based on hypervolume improvement rate: {hv_improvement:.4f}")
+            else:
+                # Phase 2: Already in complex systems phase
+                pass
             
             try:
                 # Initialize model
@@ -450,7 +551,7 @@ class TraceAwareKGOptimizer:
                 
                 # Generate candidates using taKG acquisition function
                 print(f"【DEBUG】Iteration {self.current_iteration}: Generating acquisition function...")
-                acq_func = self._compute_trace_aware_knowledge_gradient(model, self.X)
+                acq_func = self._compute_trace_aware_knowledge_gradient(model)
                 
                 print(f"【DEBUG】Iteration {self.current_iteration}: Optimizing acquisition function...")
                 candidates, acq_values = optimize_acqf(
@@ -463,6 +564,26 @@ class TraceAwareKGOptimizer:
                     sequential=True
                 )
                 print(f"【DEBUG】Iteration {self.current_iteration}: Generated {candidates.shape[0]} candidates")
+                
+                # Add diversity promotion: if candidates are too similar to existing points, add exploration
+                if self.X.shape[0] > 0:
+                    # Calculate average distance between new candidates and existing points
+                    with torch.no_grad():
+                        # Calculate distances in normalized space for better comparison
+                        X_normalized = normalize(self.X, self.bounds)
+                        candidates_normalized = normalize(candidates, self.bounds)
+                        
+                        # Calculate minimum distance from each candidate to existing points
+                        distances = torch.cdist(candidates_normalized, X_normalized)
+                        min_distances = distances.min(dim=1).values
+                        avg_min_distance = min_distances.mean().item()
+                        
+                        # If candidates are too close to existing points, add exploration noise
+                        if avg_min_distance < 0.1:
+                            print(f"【INFO】Candidates are too similar to existing points (avg min distance: {avg_min_distance:.4f}), adding exploration noise")
+                            # Add small random noise to encourage exploration
+                            exploration_noise = torch.randn_like(candidates) * 0.05
+                            candidates += exploration_noise
                 
                 # Unnormalize and process candidates
                 candidates = unnormalize(candidates, self.bounds)
@@ -481,13 +602,17 @@ class TraceAwareKGOptimizer:
                 if simulation_flag:
                     y_new = self.simulate_experiment(candidates)
                 else:
+                    # In real scenario, get human input
                     y_new = self.get_human_input(candidates)
+                
+                # Process observed values to handle saturated objectives and prevent local optima
+                y_processed = self._process_observed_values(y_new)
                 
                 # Update data
                 print(f"【DEBUG】Iteration {self.current_iteration}: Updating data...")
                 self.X = torch.cat([self.X, candidates])
-                self.Y = torch.cat([self.Y, y_new])
-                self.save_experiment_data(candidates, y_new)
+                self.Y = torch.cat([self.Y, y_processed])
+                self.save_experiment_data(candidates, y_new)  # Save original values for record keeping
                 
                 # Record iteration with the updated current_iteration
                 self._record_iteration(
@@ -678,7 +803,7 @@ class TraceAwareKGOptimizer:
         X_normalized = normalize(X_grid, self.bounds)
         
         # Get model predictions
-        mll, model = self.initialize_model()
+        _, model = self.initialize_model()
         with torch.no_grad():
             posterior = model.posterior(X_normalized)
             mean = posterior.mean
