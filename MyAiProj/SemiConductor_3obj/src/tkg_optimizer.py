@@ -82,7 +82,8 @@ class TraceAwareKGOptimizer:
         
         print(f"【INFO】Initialized TraceAwareKGOptimizer with device: {self.device}")
         print(f"【INFO】Parameter space: {self.param_names}")
-        print(f"【INFO】Bounds: {self.bounds}")
+        # Print bounds on CPU to avoid CUDA kernel errors during formatting
+        print(f"【INFO】Bounds: {self.bounds.cpu()}")
     
     def _define_parameter_spaces(self):
         """Define parameter spaces based on user requirements"""
@@ -113,14 +114,18 @@ class TraceAwareKGOptimizer:
         self.parameters = {**self.organic_params, **self.metal_params, **self.condition_params}
         self.param_names = list(self.parameters.keys())
         
-        # Parameter bounds on the specified device
-        self.bounds = torch.tensor([
+        # Create bounds on CPU first for safe printing
+        bounds_cpu = torch.tensor([
             [param[0] for param in self.parameters.values()],
             [param[1] for param in self.parameters.values()]
-        ], dtype=torch.float64, device=self.device)
+        ], dtype=torch.float64)
         
-        # Parameter steps for discretization on the specified device
-        self.steps = torch.tensor([param[2] for param in self.parameters.values()], device=self.device)
+        # Create steps on CPU first for safe printing
+        steps_cpu = torch.tensor([param[2] for param in self.parameters.values()])
+        
+        # Move tensors to the specified device
+        self.bounds = bounds_cpu.to(self.device)
+        self.steps = steps_cpu.to(self.device)
         
         # Safety constraints for pH based on formula ID
         # Create a direct mapping from formula ID to pH range for better performance and readability

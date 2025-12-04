@@ -46,23 +46,52 @@ def main(n_iter, device=None):
         # Use specified device
         final_device = device
     
-    # Initialize and run optimizer
+    # Initialize and run optimizer with fallback to CPU if GPU fails
     print(f"\n=== Optimization Setup ===")
-    optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42, device=final_device)
-    print(f"Using device: {optimizer.device}")
     
-    # Run optimization
-    optimizer.optimize(n_iter=n_iter, simulation_flag=True)
-    
-    # Generate plots
-    print(f"\n=== Generating Visualizations ===")
-    optimizer.plot_pareto_front()
-    optimizer.plot_hypervolume_convergence()
+    try:
+        # Try to use the specified device
+        optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42, device=final_device)
+        print(f"Using device: {optimizer.device}")
+        
+        # Run optimization
+        optimizer.optimize(n_iter=n_iter, simulation_flag=True)
+        
+        # Generate plots
+        print(f"\n=== Generating Visualizations ===")
+        optimizer.plot_pareto_front()
+        optimizer.plot_hypervolume_convergence()
 
-    print(f"\n=== Optimization Complete ===")
-    print(f"Total iterations: {n_iter}")
-    print(f"Final hypervolume: {optimizer.hypervolume_history[-1]:.4f}")
-    print(f"Total samples: {optimizer.X.shape[0]}")
+        print(f"\n=== Optimization Complete ===")
+        print(f"Total iterations: {n_iter}")
+        print(f"Final hypervolume: {optimizer.hypervolume_history[-1]:.4f}")
+        print(f"Total samples: {optimizer.X.shape[0]}")
+        
+    except RuntimeError as e:
+        # Check if it's a CUDA compatibility error
+        if "CUDA error" in str(e) or "no kernel image" in str(e):
+            print(f"【WARNING】GPU compatibility error: {e}")
+            print("【INFO】Falling back to CPU...")
+            
+            # Re-initialize with CPU
+            optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42, device="cpu")
+            print(f"Using device: {optimizer.device}")
+            
+            # Run optimization on CPU
+            optimizer.optimize(n_iter=n_iter, simulation_flag=True)
+            
+            # Generate plots
+            print(f"\n=== Generating Visualizations ===")
+            optimizer.plot_pareto_front()
+            optimizer.plot_hypervolume_convergence()
+
+            print(f"\n=== Optimization Complete ===")
+            print(f"Total iterations: {n_iter}")
+            print(f"Final hypervolume: {optimizer.hypervolume_history[-1]:.4f}")
+            print(f"Total samples: {optimizer.X.shape[0]}")
+        else:
+            # Re-raise other runtime errors
+            raise
 
 
 def main_multi_gpu(n_iter):
