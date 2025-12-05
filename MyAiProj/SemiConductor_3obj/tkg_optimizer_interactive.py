@@ -36,7 +36,7 @@ class DatabaseManager:
             conn.close()
     
     def insert_samples(self, proj_name, iter_id, samples, is_initial=False):
-        """Insert sample data"""
+        """Insert sample data including metal oxide parameters"""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -54,13 +54,33 @@ class DatabaseManager:
             for i, sample in enumerate(samples):
                 # Ensure i+1 does not exceed batch_num
                 exp_id = i + 1 if (i + 1) <= batch_num else batch_num
+                
+                # Extract all parameters including new metal oxide parameters
+                # Sample format: [Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
+                #                 MetalAType, MetalAConc, MetalBType, MolarRatio, Condition]
+                formula_id = sample[0]
+                concentration = sample[1]
+                temperature = sample[2]
+                soak_time = sample[3]
+                ph = sample[4]
+                curing_time = sample[5]
+                metal_a_type = sample[6]
+                metal_a_concentration = sample[7]
+                metal_b_type = sample[8]
+                molar_ratio = sample[9]
+                condition = sample[10]
+                
                 cursor.execute('''
                 INSERT INTO BayesExperData (
-                    ExpID, ProjName, IterId, Formula, Concentration, Temperature, SoakTime, PH, CreateTime
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (exp_id, proj_name, iter_id, sample[0], sample[1], sample[2], sample[3], sample[4], create_time))
+                    ExpID, ProjName, IterId, Formula, Concentration, Temperature, 
+                    SoakTime, PH, CuringTime, MetalAType, MetalAConc, MetalBType, 
+                    MolarRatio, Condition, CreateTime
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (exp_id, proj_name, iter_id, formula_id, concentration, temperature, 
+                      soak_time, ph, curing_time, metal_a_type, metal_a_concentration, 
+                      metal_b_type, molar_ratio, condition, create_time))
             
-            # Update AlgoGenId
+            # Update AlgoGenId and IterId
             cursor.execute('''
             UPDATE AlgoProjInfo 
             SET AlgoGenId = ?, IterId = ?
@@ -77,12 +97,15 @@ class DatabaseManager:
             conn.close()
     
     def get_experiment_data(self, proj_name, iter_id):
-        """Get experiment data for a specific iteration"""
+        """Get experiment data for a specific iteration including all parameters and objectives"""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute('''
-            SELECT Formula, Concentration, Temperature, SoakTime, PH, Coverage, Uniformity, Adhesion 
+            SELECT 
+                Formula, Concentration, Temperature, SoakTime, PH, CuringTime, 
+                MetalAType, MetalAConc, MetalBType, MolarRatio, Condition, 
+                Coverage, Uniformity, Adhesion 
             FROM BayesExperData 
             WHERE ProjName = ? AND IterId = ?
             ''', (proj_name, iter_id))
@@ -91,7 +114,7 @@ class DatabaseManager:
             conn.close()
     
     def update_experiment_data(self, proj_name, iter_id, exp_data):
-        """Update experiment data"""
+        """Update experiment data with all parameters and objectives"""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
@@ -104,11 +127,15 @@ class DatabaseManager:
                 WHERE ProjName = ? AND IterId = ? 
                   AND Formula = ? AND Concentration = ? 
                   AND Temperature = ? AND SoakTime = ? AND PH = ?
+                  AND CuringTime = ? AND MetalAType = ? AND MetalAConc = ?
+                  AND MetalBType = ? AND MolarRatio = ? AND Condition = ?
                 ''', (
                     data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
                     proj_name, iter_id,
                     data.get('Formula'), data.get('Concentration'), 
-                    data.get('Temperature'), data.get('SoakTime'), data.get('PH')
+                    data.get('Temperature'), data.get('SoakTime'), data.get('PH'),
+                    data.get('CuringTime'), data.get('MetalAType'), data.get('MetalAConc'),
+                    data.get('MetalBType'), data.get('MolarRatio'), data.get('Condition')
                 ))
             
             # Update AlgoRecevId to indicate successful data return
@@ -197,11 +224,14 @@ class InteractiveTraceAwareKGOptimizer(TraceAwareKGOptimizer):
             if i >= batch_size:
                 break
                 
-            # Extract objectives (order: Coverage, Uniformity, Adhesion in database)
+            # Extract objectives (order in database: Coverage, Uniformity, Adhesion)
+            # Database columns: [Formula, Concentration, Temperature, SoakTime, PH, CuringTime, 
+            #                   MetalAType, MetalAConc, MetalBType, MolarRatio, Condition, 
+            #                   Coverage, Uniformity, Adhesion]
             # Convert to our internal order: Uniformity, Coverage, Adhesion
-            uniformity = float(data[6])  # 7th column in database
-            coverage = float(data[5])     # 6th column in database
-            adhesion = float(data[7])     # 8th column in database
+            uniformity = float(data[12])  # 13th column in database
+            coverage = float(data[11])     # 12th column in database
+            adhesion = float(data[13])     # 14th column in database
             
             y[i] = torch.tensor([uniformity, coverage, adhesion], dtype=torch.float64, device=self.device)
         
@@ -215,7 +245,7 @@ class InteractiveTraceAwareKGOptimizer(TraceAwareKGOptimizer):
         return y
     
     def load_existing_data(self):
-        """Load existing experiment data from database"""
+        """Load existing experiment data from database including all parameters"""
         print(f"【INFO】Loading existing experiment data for project '{self.proj_name}'...")
         
         # Get all experiment data for the project
@@ -223,7 +253,9 @@ class InteractiveTraceAwareKGOptimizer(TraceAwareKGOptimizer):
         try:
             cursor = conn.cursor()
             cursor.execute('''
-            SELECT Formula, Concentration, Temperature, SoakTime, PH, Coverage, Uniformity, Adhesion, IterId
+            SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime, 
+                   MetalAType, MetalAConc, MetalBType, MolarRatio, Condition,
+                   Coverage, Uniformity, Adhesion, IterId
             FROM BayesExperData 
             WHERE ProjName = ?
             ORDER BY IterId, ExpID
@@ -240,30 +272,35 @@ class InteractiveTraceAwareKGOptimizer(TraceAwareKGOptimizer):
             max_iter_id = 0
             
             for data in exp_data:
-                # Extract parameters (order: Formula, Concentration, Temperature, SoakTime, PH)
-                params = list(data[:5])
+                # Extract all parameters including metal oxide parameters
+                # Database columns: [Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
+                #                   MetalAType, MetalAConc, MetalBType, MolarRatio, Condition,
+                #                   Coverage, Uniformity, Adhesion, IterId]
+                formula_id = data[0]
+                concentration = data[1]
+                temperature = data[2]
+                soak_time = data[3]
+                ph = data[4]
+                curing_time = data[5]
+                metal_a_type = data[6]
+                metal_a_concentration = data[7]
+                metal_b_type = data[8]
+                molar_ratio = data[9]
+                condition = data[10]
                 
-                # Add default values for additional parameters
-                # Original parameters: Formula, Concentration, Temperature, SoakTime, PH
-                # New parameters: Formula, Concentration, Temperature, SoakTime, PH, CuringTime, 
-                # MetalA, MetalAConc, MetalB, MolarRatio, Condition
-                curing_time = 20  # Default curing time
-                metal_a_type = 1  # Default metal A type
-                metal_a_concentration = 30  # Default metal A concentration
-                metal_b_type = 0  # Default: no metal B
-                molar_ratio = 5  # Default molar ratio
-                condition = 1  # Default: organic only
-                
-                full_params = params + [curing_time, metal_a_type, metal_a_concentration, 
-                                      metal_b_type, molar_ratio, condition]
+                # Full parameter list in correct order
+                full_params = [
+                    formula_id, concentration, temperature, soak_time, ph, curing_time,
+                    metal_a_type, metal_a_concentration, metal_b_type, molar_ratio, condition
+                ]
                 
                 # Extract objectives
-                uniformity = float(data[6])
-                coverage = float(data[5])
-                adhesion = float(data[7])
+                coverage = float(data[11])
+                uniformity = float(data[12])
+                adhesion = float(data[13])
                 
                 # Extract iteration ID
-                iter_id = data[8]
+                iter_id = data[14]
                 if iter_id > max_iter_id:
                     max_iter_id = iter_id
                 
@@ -278,6 +315,10 @@ class InteractiveTraceAwareKGOptimizer(TraceAwareKGOptimizer):
             self.X = X_tensor
             self.Y = Y_tensor
             self.current_iteration_id = max_iter_id + 1
+            
+            # Clear cache to ensure fresh hypervolume calculation
+            self._cached_hv = None
+            self._cached_hv_iteration = -1
             
             # Update history dataframe
             timestamp = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
