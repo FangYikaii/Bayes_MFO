@@ -205,7 +205,7 @@ export default function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
-          simulation_flag: true,
+          simulation_flag: !useRealApi, // 如果使用真实API，则simulation_flag=false；否则为true（模拟）
           total_iterations: algorithmParams.nIter
         })
       });

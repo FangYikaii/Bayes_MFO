@@ -670,26 +670,48 @@ class TraceAwareKGOptimizer:
             
         Returns:
             Tensor of shape (batch_size, num_objectives) containing the measured objectives
+        
+        Note: For debugging purposes, this method currently returns deterministic values
+        based on simulate_experiment() with a fixed seed. In production, this should be
+        replaced with actual experiment measurements.
         """
-        # Example implementation skeleton for real experiments
         batch_size = candidates.shape[0]
         num_objectives = 3  # Uniformity, Coverage, Adhesion
         
-        # In real implementation, this would interface with measurement equipment or
-        # prompt the user for input via a GUI or command line interface
-        print(f"【INFO】Waiting for human input for {batch_size} candidates...")
+        print(f"【DEBUG】get_human_input called for {batch_size} candidates (using simulated values for debugging)")
         
-        # For now, we'll provide a more informative error message with implementation guidance
-        raise NotImplementedError(
-            "Human input method not implemented. To use this method:\n" +
-            "1. Override this method in a subclass\n" +
-            "2. Implement code to obtain actual measurements for the candidates\n" +
-            "3. Return a tensor of shape (batch_size, 3) with the measured values\n\n" +
-            "Example format for returned tensor:\n" +
-            "torch.tensor([[uniformity1, coverage1, adhesion1],\n" +
-            "             [uniformity2, coverage2, adhesion2],\n" +
-            "             ...])"
-        )
+        # ===== DEBUGGING MODE: Return deterministic values =====
+        # Option 1: Return completely fixed values (same for all candidates)
+        # Uncomment the following lines to return fixed values:
+        # fixed_values = torch.tensor([[0.5, 0.5, 0.5]], dtype=torch.float64, device=self.device)
+        # return fixed_values.repeat(batch_size, 1)
+        
+        # Option 2: Return deterministic values based on candidates (same input = same output)
+        # This is the current implementation - uses simulate_experiment with fixed seed
+        import random
+        import numpy as np
+        old_torch_state = torch.get_rng_state()
+        old_np_state = np.random.get_state()
+        old_random_state = random.getstate()
+        
+        try:
+            # Use fixed seed for deterministic results
+            torch.manual_seed(42)
+            np.random.seed(42)
+            random.seed(42)
+            
+            # Use simulate_experiment to get deterministic values
+            # This ensures same candidates always return same results
+            y = self.simulate_experiment(candidates)
+            
+        finally:
+            # Restore original random state
+            torch.set_rng_state(old_torch_state)
+            np.random.set_state(old_np_state)
+            random.setstate(old_random_state)
+        
+        print(f"【DEBUG】get_human_input returning simulated values: shape={y.shape}")
+        return y
 
     def plot_pareto_front(self):
         """Plot Pareto front"""

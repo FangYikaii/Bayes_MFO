@@ -32,11 +32,14 @@ const MetricsChart: React.FC<Props> = ({ metricsHistory }) => {
           />
           <XAxis 
             dataKey="iteration" 
+            type="number"
             stroke="#94a3b8" 
             fontSize={11}
             tick={{ fill: '#cbd5e1' }}
             tickLine={{ stroke: '#64748b' }}
             axisLine={{ stroke: '#64748b' }}
+            domain={[1, 'dataMax']}
+            allowDecimals={false}
             label={{ 
               value: 'Iteration', 
               position: 'insideBottom', 
@@ -44,7 +47,7 @@ const MetricsChart: React.FC<Props> = ({ metricsHistory }) => {
               fill: '#94a3b8',
               fontSize: 12,
               fontWeight: 500
-            }} 
+            }}
           />
           <YAxis 
             stroke="#94a3b8" 

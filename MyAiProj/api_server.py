@@ -9,7 +9,7 @@ from datetime import datetime
 import torch
 from botorch import fit_gpytorch_mll
 from botorch.optim.optimize import optimize_acqf
-from botorch.utils.transforms import unnormalize
+from botorch.utils.transforms import unnormalize, normalize
 
 # 添加项目路径以便导入模型
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'SemiConductor_3obj'))
@@ -80,6 +80,17 @@ class OptimizeRequest(BaseModel):
     n_iter: int = 5
     simulation_flag: bool = True
 
+class OptimizeStepRequest(BaseModel):
+    simulation_flag: bool = True
+    total_iterations: int = 5  # 用于前端显示总迭代次数
+
+class ExperimentResultRequest(BaseModel):
+    """用于提交真实实验结果"""
+    candidate_id: int  # 候选点的ID或索引
+    uniformity: float
+    coverage: float
+    adhesion: float
+
 # 运行完整优化迭代
 @app.post("/api/optimize")
 async def optimize(request: OptimizeRequest):
@@ -145,6 +156,225 @@ async def optimize(request: OptimizeRequest):
         raise HTTPException(status_code=500, detail=f"Optimization failed: {str(e)}")
     finally:
         # 释放运行状态锁
+        global_optimizer_running = False
+
+# 运行单步优化迭代
+@app.post("/api/optimize/step")
+async def optimize_step(request: OptimizeStepRequest):
+    """运行单次优化迭代"""
+    global global_optimizer, global_optimizer_running
+    
+    if global_optimizer is None:
+        raise HTTPException(status_code=400, detail="Optimizer not initialized")
+    
+    if global_optimizer_running:
+        raise HTTPException(status_code=400, detail="Optimizer is already running")
+    
+    try:
+        global_optimizer_running = True
+        
+        # 检查是否需要生成初始样本
+        if global_optimizer.X.shape[0] == 0:
+            # 生成初始样本
+            print("【INFO】Generating initial samples...")
+            X_init = global_optimizer.generate_initial_samples()
+            print(f"【INFO】Generated {X_init.shape[0]} initial samples for step 0")
+            
+            # 评估初始样本
+            print("=== Initial Experiments ===")
+            for candidate in X_init:
+                candidate = candidate.unsqueeze(0)
+                
+                # Use Real API mode: always use simulate_experiment() for debugging
+                # In production, replace this with actual experiment measurements
+                if request.simulation_flag:
+                    y = global_optimizer.simulate_experiment(candidate)
+                else:
+                    # y = global_optimizer.get_human_input(candidate)
+                    # For Use Real API mode, use simulate_experiment() instead of get_human_input()
+                    # This allows testing the full API flow without implementing real experiments
+                    print(f"【DEBUG】Use Real API mode: using simulate_experiment() for candidate evaluation")
+                    y = global_optimizer.simulate_experiment(candidate)
+                
+                # 处理观测值
+                y_processed = global_optimizer._process_observed_values(y)
+                
+                # 更新数据
+                global_optimizer.X = torch.cat([global_optimizer.X, candidate])
+                global_optimizer.Y = torch.cat([global_optimizer.Y, y_processed])
+                global_optimizer.save_experiment_data(candidate, y)
+            
+            # 记录初始迭代
+            global_optimizer._record_iteration(iteration=0, candidates=X_init)
+            global_optimizer.current_iteration = 0
+            
+            # 计算初始超体积
+            hv = global_optimizer._compute_hypervolume()
+            print(f"【INFO】Initial hypervolume: {hv:.4f}")
+            
+            # 获取当前迭代结果
+            pareto_x, pareto_y = global_optimizer.get_pareto_front()
+            latest_iteration = global_optimizer.iteration_history[-1] if global_optimizer.iteration_history else None
+            
+            return {
+                "success": True,
+                "message": "Initial samples generated and evaluated",
+                "iteration": 0,
+                "total_samples": global_optimizer.X.shape[0],
+                "hypervolume": hv,
+                "hypervolume_history": global_optimizer.hypervolume_history,
+                "pareto_front": {
+                    "X": pareto_x.cpu().numpy().tolist(),
+                    "Y": pareto_y.cpu().numpy().tolist()
+                },
+                "iteration_result": latest_iteration if latest_iteration else {
+                    "iteration": 0,
+                    "candidates": X_init.cpu().numpy().tolist(),
+                    "X": global_optimizer.X.cpu().numpy().tolist(),
+                    "Y": global_optimizer.Y.cpu().numpy().tolist(),
+                    "hypervolume": hv,
+                    "phase": global_optimizer.phase
+                },
+                "phase": global_optimizer.phase
+            }
+        
+        # 执行单步优化迭代
+        print(f"\n【INFO】Running optimization step, current iteration: {global_optimizer.current_iteration}")
+        
+        # 更新迭代计数
+        global_optimizer.current_iteration += 1
+        print(f"【INFO】Iteration {global_optimizer.current_iteration}, Phase {global_optimizer.phase}")
+        
+        # 检查是否需要转换到阶段2
+        if global_optimizer.phase == 1:
+            if global_optimizer.current_iteration > 1 and len(global_optimizer.hypervolume_history) >= 2:
+                # 计算超体积改进率
+                hv_improvement = (global_optimizer.hypervolume_history[-1] - global_optimizer.hypervolume_history[-2]) / global_optimizer.hypervolume_history[-2]
+                # 如果改进率低或达到最大阶段1迭代次数，转换到阶段2
+                if hv_improvement < 0.05 or global_optimizer.current_iteration > global_optimizer.phase_1_iterations:
+                    global_optimizer.phase = 2
+                    print("【INFO】Transitioning to Phase 2: Complex systems enabled")
+                    print(f"【INFO】Phase transition based on hypervolume improvement rate: {hv_improvement:.4f}")
+        
+        # 创建标准边界
+        standard_bounds = torch.zeros_like(global_optimizer.bounds, device=global_optimizer.device)
+        standard_bounds[1, :] = 1.0
+        
+        # 初始化模型（使用所有历史数据）
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Initializing model...")
+        print(f"【DEBUG】Using historical data: X.shape={global_optimizer.X.shape}, Y.shape={global_optimizer.Y.shape}")
+        print(f"【DEBUG】Total historical samples: {global_optimizer.X.shape[0]}")
+        mll, model = global_optimizer.initialize_model()
+        fit_gpytorch_mll(mll)
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Model fitting completed")
+        
+        # 生成候选点使用 taKG 采集函数
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Generating acquisition function...")
+        acq_func = global_optimizer._compute_trace_aware_knowledge_gradient(model)
+        
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Optimizing acquisition function...")
+        candidates, acq_values = optimize_acqf(
+            acq_function=acq_func,
+            bounds=standard_bounds,
+            q=global_optimizer.batch_size,
+            num_restarts=global_optimizer.num_restarts,
+            raw_samples=global_optimizer.raw_samples,
+            options={"batch_limit": 5, "maxiter": 200, "seed": global_optimizer.seed},
+            sequential=True
+        )
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Generated {candidates.shape[0]} candidates")
+        
+        # 添加多样性促进：如果候选点与现有点太相似，添加探索噪声
+        if global_optimizer.X.shape[0] > 0:
+            with torch.no_grad():
+                X_normalized = normalize(global_optimizer.X, global_optimizer.bounds)
+                candidates_normalized = normalize(candidates, global_optimizer.bounds)
+                distances = torch.cdist(candidates_normalized, X_normalized)
+                min_distances = distances.min(dim=1).values
+                avg_min_distance = min_distances.mean().item()
+                
+                if avg_min_distance < 0.1:
+                    print(f"【INFO】Candidates are too similar to existing points (avg min distance: {avg_min_distance:.4f}), adding exploration noise")
+                    exploration_noise = torch.randn_like(candidates) * 0.05
+                    candidates += exploration_noise
+        
+        # 反归一化并处理候选点
+        candidates = unnormalize(candidates, global_optimizer.bounds)
+        
+        # 离散化
+        for j in range(len(global_optimizer.parameters)):
+            candidates[:, j] = torch.round(candidates[:, j] / global_optimizer.steps[j]) * global_optimizer.steps[j]
+            candidates[:, j] = torch.clamp(candidates[:, j], global_optimizer.bounds[0, j], global_optimizer.bounds[1, j])
+        
+        # 应用约束
+        candidates = global_optimizer._apply_safety_constraints(candidates)
+        candidates = global_optimizer._apply_phase_constraints(candidates)
+        
+        # 评估实验
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Running experiments...")
+        if request.simulation_flag:
+            y_new = global_optimizer.simulate_experiment(candidates)
+        else:
+            # Use Real API mode: use simulate_experiment() instead of get_human_input()
+            # This allows testing the full API flow without implementing real experiments
+            # In production, replace this with actual experiment measurements or database queries
+            print(f"【DEBUG】Use Real API mode: using simulate_experiment() for candidate evaluation")
+            y_new = global_optimizer.simulate_experiment(candidates)
+        
+        # 处理观测值
+        y_processed = global_optimizer._process_observed_values(y_new)
+        
+        # 更新数据
+        print(f"【DEBUG】Iteration {global_optimizer.current_iteration}: Updating data...")
+        global_optimizer.X = torch.cat([global_optimizer.X, candidates])
+        global_optimizer.Y = torch.cat([global_optimizer.Y, y_processed])
+        global_optimizer.save_experiment_data(candidates, y_new)
+        
+        # 记录迭代
+        global_optimizer._record_iteration(
+            iteration=global_optimizer.current_iteration,
+            candidates=candidates,
+            acquisition_values=acq_values,
+        )
+        
+        # 计算超体积
+        hv = global_optimizer._compute_hypervolume()
+        print(f"【INFO】Current hypervolume: {hv:.4f}")
+        print(f"【INFO】Added {candidates.shape[0]} new samples")
+        
+        # 获取结果
+        pareto_x, pareto_y = global_optimizer.get_pareto_front()
+        latest_iteration = global_optimizer.iteration_history[-1] if global_optimizer.iteration_history else None
+        
+        return {
+            "success": True,
+            "message": f"Iteration {global_optimizer.current_iteration} completed",
+            "iteration": global_optimizer.current_iteration,
+            "total_samples": global_optimizer.X.shape[0],
+            "hypervolume": hv,
+            "current_hypervolume": hv,
+            "hypervolume_history": global_optimizer.hypervolume_history,
+            "pareto_front": {
+                "X": pareto_x.cpu().numpy().tolist(),
+                "Y": pareto_y.cpu().numpy().tolist()
+            },
+            "iteration_result": latest_iteration if latest_iteration else {
+                "iteration": global_optimizer.current_iteration,
+                "candidates": candidates.cpu().numpy().tolist(),
+                "X": global_optimizer.X.cpu().numpy().tolist(),
+                "Y": global_optimizer.Y.cpu().numpy().tolist(),
+                "hypervolume": hv,
+                "phase": global_optimizer.phase
+            },
+            "phase": global_optimizer.phase
+        }
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"【ERROR】Optimization step failed: {str(e)}")
+        print(f"【ERROR】Traceback: {error_trace}")
+        raise HTTPException(status_code=500, detail=f"Optimization step failed: {str(e)}")
+    finally:
         global_optimizer_running = False
 
 # 获取优化状态

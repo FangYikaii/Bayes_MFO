@@ -1,0 +1,40 @@
+# Generated experiment data files (CSV)
+MyAiProj/SemiConductor_3obj/data/output/tkg_experiment_*.csv
+**/data/output/tkg_experiment_*.csv
+
+# Generated optimization history files (JSON)
+MyAiProj/SemiConductor_3obj/data/output/tkg_optimization_history_*.json
+**/data/output/tkg_optimization_history_*.json
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Keep configuration JSON files (package.json, tsconfig.json, etc.)
+!package.json
+!package-lock.json
+!tsconfig.json
+!metadata.json
+
