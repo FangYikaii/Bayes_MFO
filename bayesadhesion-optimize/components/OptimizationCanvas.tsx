@@ -202,32 +202,72 @@ const OptimizationCanvas: React.FC<Props> = ({ phase, points, onAddPoint, width,
   }, [phase, points, width, height]);
 
   return (
-    <div className="relative rounded-xl overflow-hidden shadow-2xl border border-slate-700 bg-slate-900">
-      <canvas 
-        ref={canvasRef} 
-        width={width} 
-        height={height} 
-        className="block cursor-crosshair"
-      />
-      
-      {/* Labels */}
-      <div className="absolute bottom-2 right-4 text-sky-400 font-mono text-sm font-bold">
-        Oxide Parameter (Single Formula A) &rarr;
-      </div>
-      <div className="absolute top-4 left-4 text-emerald-400 font-mono text-sm font-bold origin-top-left -rotate-90 translate-y-full">
-        Organic Parameter (Single Formula B) &rarr;
-      </div>
-      
-      {/* Phase Indicator Overlay */}
-      <div className="absolute top-2 right-2 flex flex-col items-end pointer-events-none">
-        <div className={`px-3 py-1 rounded mb-1 text-xs font-bold transition-all ${phase === Phase.OXIDE_ONLY ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
-          Phase 1: Oxide Optimization
+    <div className="relative" style={{ paddingLeft: '40px' }}>
+      <div className="relative rounded-xl overflow-hidden shadow-2xl border border-slate-700 bg-slate-900">
+        <canvas 
+          ref={canvasRef} 
+          width={width} 
+          height={height} 
+          className="block cursor-crosshair relative z-0"
+        />
+        
+        {/* Labels - X Axis (Horizontal) */}
+        <div className={`absolute bottom-2 right-4 font-mono text-sm font-bold transition-all whitespace-nowrap z-10 ${
+          phase === Phase.OXIDE_ONLY ? 'text-sky-400' :
+          phase === Phase.ORGANIC_ONLY ? 'text-emerald-400' :
+          phase === Phase.HYBRID_SEARCH ? 'text-purple-400' :
+          'text-sky-400'
+        }`}>
+          {phase === Phase.OXIDE_ONLY ? 'oxide parameter-A' :
+           phase === Phase.ORGANIC_ONLY ? 'organic parameter-A' :
+           phase === Phase.HYBRID_SEARCH ? 'hybrid parameter-A' :
+           'oxide parameter-A'} &rarr;
         </div>
-        <div className={`px-3 py-1 rounded mb-1 text-xs font-bold transition-all ${phase === Phase.ORGANIC_ONLY ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
-          Phase 2: Organic Optimization
+        
+        {/* Labels - Y Axis (Vertical) - Aligned with canvas center */}
+        <div className={`absolute font-mono text-sm font-bold origin-center whitespace-nowrap transition-all pointer-events-none z-10 ${
+          phase === Phase.OXIDE_ONLY ? 'text-sky-400' :
+          phase === Phase.ORGANIC_ONLY ? 'text-emerald-400' :
+          phase === Phase.HYBRID_SEARCH ? 'text-purple-400' :
+          'text-sky-400'
+        }`} style={{ 
+          top: '25%', 
+          left: '-68px',
+          transform: 'translateY(-50%) rotate(-90deg)'
+        }}>
+          {phase === Phase.OXIDE_ONLY ? 'oxide parameter-B' :
+           phase === Phase.ORGANIC_ONLY ? 'organic parameter-B' :
+           phase === Phase.HYBRID_SEARCH ? 'hybrid parameter-B' :
+           'oxide parameter-B'} &rarr;
         </div>
-        <div className={`px-3 py-1 rounded mb-1 text-xs font-bold transition-all ${phase === Phase.HYBRID_SEARCH ? 'bg-purple-500 text-white' : 'bg-slate-800 text-slate-500'}`}>
-          Phase 3: Hybrid Global Search
+        
+        {/* Phase Indicator Overlay */}
+        <div className="absolute top-2 right-2 flex flex-col items-end pointer-events-none">
+          {phase === Phase.OXIDE_ONLY && (
+            <div className="px-3 py-1 rounded text-xs font-bold transition-all bg-sky-500 text-white">
+              Single formulation stage: oxide
+            </div>
+          )}
+          {phase === Phase.ORGANIC_ONLY && (
+            <div className="px-3 py-1 rounded text-xs font-bold transition-all bg-emerald-500 text-white">
+              Single formula stage: organic
+            </div>
+          )}
+          {phase === Phase.HYBRID_SEARCH && (
+            <div className="px-3 py-1 rounded text-xs font-bold transition-all bg-purple-500 text-white">
+              Multi formulation stage: Mixed
+            </div>
+          )}
+          {phase === Phase.COMPLETE && (
+            <div className="px-3 py-1 rounded text-xs font-bold transition-all bg-green-500 text-white">
+              Optimization Complete
+            </div>
+          )}
+          {phase === Phase.IDLE && (
+            <div className="px-3 py-1 rounded text-xs font-bold transition-all bg-slate-800 text-slate-400">
+              Ready to Start
+            </div>
+          )}
         </div>
       </div>
     </div>

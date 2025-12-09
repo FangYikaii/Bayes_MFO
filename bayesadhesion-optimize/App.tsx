@@ -82,12 +82,50 @@ export default function App() {
         }
         
         // Update iteration count
-        setIteration(data.current_iteration);
+        const currentIter = data.current_iteration || data.iteration || 0;
+        setIteration(currentIter);
+        
+        // Update metrics from status if available
+        if (data.multi_objective_results) {
+          const results = data.multi_objective_results;
+          if (results.max_adhesion !== undefined) {
+            setBestAdhesion(results.max_adhesion);
+          }
+          if (results.max_uniformity !== undefined) {
+            setBestUniformity(results.max_uniformity);
+          }
+          if (results.max_coverage !== undefined) {
+            setBestCoverage(results.max_coverage);
+          }
+          
+          // Update metrics history from status if we have the data
+          if (currentIter > 0 && data.hypervolume_history && data.hypervolume_history.length > 0) {
+            const hypervolume = results.hypervolume || data.hypervolume_history[data.hypervolume_history.length - 1] || 0;
+            const normalizedHypervolume = hypervolume > 1 ? hypervolume / 100 : hypervolume;
+            const normalizedAdhesion = (results.max_adhesion || 0) > 1 ? (results.max_adhesion || 0) / 100 : (results.max_adhesion || 0);
+            
+            setMetricsHistory(prev => {
+              const existingIndex = prev.findIndex(item => item.iteration === currentIter);
+              if (existingIndex < 0) {
+                return [...prev, {
+                  iteration: currentIter,
+                  uniformity: results.max_uniformity || 0,
+                  coverage: results.max_coverage || 0,
+                  adhesion: normalizedAdhesion,
+                  hypervolume: normalizedHypervolume
+                }];
+              }
+              return prev;
+            });
+          }
+        }
         
         // Update phase based on backend response
-        if (data.phase === 1) {
+        if (data.phase === 1 || data.phase === 'OXIDE ONLY') {
           setPhase(Phase.OXIDE_ONLY);
-        } else if (data.phase === 2) {
+        } else if (data.phase === 2 || data.phase === 'ORGANIC OPTIMIZATION') {
+          setPhase(Phase.ORGANIC_ONLY);
+        } else if (data.phase === 3 || data.phase === 'HYBRID GLOBAL SEARCH') {
           setPhase(Phase.HYBRID_SEARCH);
         }
         
@@ -192,40 +230,70 @@ export default function App() {
         
         // Update metrics
         // Get all objectives from the latest Y values
-        const latestYValues = data.iteration_result.Y;
+        const latestYValues = data.iteration_result?.Y;
+        let batchUniformity = 0;
+        let batchCoverage = 0;
+        let batchAdhesion = 0;
+        
         if (latestYValues && latestYValues.length > 0) {
           // Get the latest Y values (last batch)
-          const lastBatchSize = data.iteration_result.candidates.length;
+          const lastBatchSize = data.iteration_result.candidates?.length || latestYValues.length;
           const recentYValues = latestYValues.slice(-lastBatchSize);
           
           // Update best values for all three objectives
-          let batchUniformity = 0;
-          let batchCoverage = 0;
-          let batchAdhesion = 0;
-          
           recentYValues.forEach((y: number[]) => {
-            const uniformity = y[0];
-            const coverage = y[1];
-            const adhesion = y[2];
-            
-            batchUniformity = Math.max(batchUniformity, uniformity);
-            batchCoverage = Math.max(batchCoverage, coverage);
-            batchAdhesion = Math.max(batchAdhesion, adhesion);
-            
-            setBestUniformity(prev => Math.max(prev, uniformity));
-            setBestCoverage(prev => Math.max(prev, coverage));
-            setBestAdhesion(prev => Math.max(prev, adhesion));
+            if (Array.isArray(y) && y.length >= 3) {
+              const uniformity = y[0];
+              const coverage = y[1];
+              const adhesion = y[2];
+              
+              batchUniformity = Math.max(batchUniformity, uniformity);
+              batchCoverage = Math.max(batchCoverage, coverage);
+              batchAdhesion = Math.max(batchAdhesion, adhesion);
+              
+              setBestUniformity(prev => Math.max(prev, uniformity));
+              setBestCoverage(prev => Math.max(prev, coverage));
+              setBestAdhesion(prev => Math.max(prev, adhesion));
+            }
           });
-          
-          // Update metrics history
-          setMetricsHistory(prev => [...prev, {
-            iteration: actualIteration,
-            uniformity: batchUniformity,
-            coverage: batchCoverage,
-            adhesion: batchAdhesion,
-            hypervolume: data.current_hypervolume
-          }]);
         }
+        
+        // Always update metrics history, even if no new Y values
+        // Use current best values or values from data if available
+        const currentHypervolume = data.current_hypervolume || 0;
+        const uniformityValue = batchUniformity > 0 ? batchUniformity : (data.iteration_result?.best_objectives?.[0] || 0);
+        const coverageValue = batchCoverage > 0 ? batchCoverage : (data.iteration_result?.best_objectives?.[1] || 0);
+        const adhesionValue = batchAdhesion > 0 ? batchAdhesion : (data.iteration_result?.best_objectives?.[2] || 0);
+        
+        // Ensure values are in 0-1 range (normalize if needed)
+        const normalizedAdhesion = adhesionValue > 1 ? adhesionValue / 100 : adhesionValue;
+        const normalizedHypervolume = currentHypervolume > 1 ? currentHypervolume / 100 : currentHypervolume;
+        
+        setMetricsHistory(prev => {
+          // Check if this iteration already exists to avoid duplicates
+          const existingIndex = prev.findIndex(item => item.iteration === actualIteration);
+          if (existingIndex >= 0) {
+            // Update existing entry
+            const updated = [...prev];
+            updated[existingIndex] = {
+              iteration: actualIteration,
+              uniformity: uniformityValue,
+              coverage: coverageValue,
+              adhesion: normalizedAdhesion,
+              hypervolume: normalizedHypervolume
+            };
+            return updated;
+          } else {
+            // Add new entry
+            return [...prev, {
+              iteration: actualIteration,
+              uniformity: uniformityValue,
+              coverage: coverageValue,
+              adhesion: normalizedAdhesion,
+              hypervolume: normalizedHypervolume
+            }];
+          }
+        });
         
         // Update iteration count with actual iteration from backend
         setIteration(actualIteration);
@@ -260,6 +328,12 @@ export default function App() {
       setIsLoading(true);
       setApiStatus('Running Optimization...');
       
+      // Clear any existing timer (shouldn't be running for API, but just in case)
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      
       // Reset all states before starting new optimization
       setPoints([]);
       setIteration(0);
@@ -279,7 +353,10 @@ export default function App() {
       
       // Run exactly nIter iterations, regardless of backend return value
       for (let i = 1; i <= algorithmParams.nIter; i++) {
-        await runSingleIteration(i);
+        await runSingleIteration();
+        
+        // Also fetch status to ensure all metrics are updated
+        await getOptimizationStatus();
         
         // Small delay to show real-time updates
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -448,24 +525,50 @@ export default function App() {
         phase: nextPhase
       };
 
-      setIteration(prev => prev + 1);
+      const currentIteration = prevPoints.length + 1;
+      setIteration(currentIteration);
       setBestAdhesion(prev => Math.max(prev, adhesion));
       setBestUniformity(prev => Math.max(prev, uniformity));
       setBestCoverage(prev => Math.max(prev, coverage));
+      
+      // Normalize adhesion to 0-1 range (adhesion is 0-100)
+      const normalizedAdhesion = adhesion / 100;
+      
+      // Calculate hypervolume (simplified: use combined value as proxy, normalized)
+      const hypervolume = combinedValue / 100;
+      
+      // Update metrics history
+      setMetricsHistory(prev => [...prev, {
+        iteration: currentIteration,
+        uniformity: uniformity,
+        coverage: coverage,
+        adhesion: normalizedAdhesion,
+        hypervolume: hypervolume
+      }]);
       
       return [...prevPoints, newPoint];
     });
   }, [phase]);
 
-  // Timer Effect
+  // Timer Effect - Only for Mock Simulation, not for Real API
   useEffect(() => {
+    // Don't start timer if using Real API - iterations are handled by API calls
+    if (useRealApi) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
+    
+    // Only start timer for mock simulation
     if (phase !== Phase.IDLE && phase !== Phase.COMPLETE) {
       timerRef.current = window.setInterval(performStep, SPEED_MS);
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [phase, performStep]);
+  }, [phase, performStep, useRealApi]);
 
 
   return (
@@ -618,10 +721,16 @@ export default function App() {
                         <span className={`font-mono font-bold ${
                             phase === Phase.OXIDE_ONLY ? 'text-sky-400' :
                             phase === Phase.ORGANIC_ONLY ? 'text-emerald-400' :
-                            phase === Phase.HYBRID_SEARCH ? 'text-purple-400' : 
+                            phase === Phase.HYBRID_SEARCH ? 'text-purple-400' :
+                            phase === Phase.COMPLETE ? 'text-green-400' :
                             'text-slate-500'
                         }`}>
-                            {phase === Phase.IDLE ? 'Ready' : phase.replace('_', ' ')}
+                            {phase === Phase.IDLE ? 'Ready' :
+                             phase === Phase.OXIDE_ONLY ? 'Oxide' :
+                             phase === Phase.ORGANIC_ONLY ? 'Organic' :
+                             phase === Phase.HYBRID_SEARCH ? 'Mixed' :
+                             phase === Phase.COMPLETE ? 'Complete' :
+                             phase.replace('_', ' ')}
                         </span>
                     </div>
 
@@ -637,7 +746,7 @@ export default function App() {
                         <div className="grid grid-cols-2 gap-4">
                             <div className="bg-slate-800 rounded-lg p-3">
                                 <div className="text-xs text-slate-500">Max Adhesion</div>
-                                <div className="font-mono text-xl font-bold text-yellow-400">
+                                <div className="font-mono text-lg font-bold text-yellow-400">
                                     {bestAdhesion.toFixed(1)} N/m
                                 </div>
                             </div>
@@ -667,34 +776,34 @@ export default function App() {
                 </div>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl relative overflow-hidden flex flex-col" style={{ height: '375px' }}>
                 <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-sky-500 via-emerald-500 to-purple-500 opacity-50"></div>
-                <h3 className="font-bold text-slate-200 mb-2">Algorithm Strategy</h3>
-                <ul className="space-y-3 text-sm text-slate-400">
-                    <li className={`flex gap-3 items-start ${phase === Phase.OXIDE_ONLY ? 'text-sky-300' : ''}`}>
+                <h3 className="font-bold text-slate-200 mb-4 flex-shrink-0 -mt-2">Algorithm Strategy</h3>
+                <ul className="space-y-5 text-sm text-slate-400">
+                    <li className={`flex gap-4 items-start ${phase === Phase.OXIDE_ONLY ? 'text-sky-300' : ''}`}>
                         <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${phase === Phase.OXIDE_ONLY ? 'border-sky-500 bg-sky-500/20' : 'border-slate-600'}`}>
                             {phase === Phase.OXIDE_ONLY && <div className="w-2 h-2 bg-sky-500 rounded-full animate-pulse" />}
                         </div>
-                        <span>
-                            <strong className="block text-slate-300">1. Marginal Search (Oxide)</strong>
+                        <span className="flex-1">
+                            <strong className="block text-slate-300 mb-1">1. Marginal Search (Oxide)</strong>
                             Finding optimal parameters for the pure oxide formula.
                         </span>
                     </li>
-                    <li className={`flex gap-3 items-start ${phase === Phase.ORGANIC_ONLY ? 'text-emerald-300' : ''}`}>
+                    <li className={`flex gap-4 items-start ${phase === Phase.ORGANIC_ONLY ? 'text-emerald-300' : ''}`}>
                          <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${phase === Phase.ORGANIC_ONLY ? 'border-emerald-500 bg-emerald-500/20' : 'border-slate-600'}`}>
                             {phase === Phase.ORGANIC_ONLY && <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />}
                         </div>
-                        <span>
-                            <strong className="block text-slate-300">2. Marginal Search (Organic)</strong>
+                        <span className="flex-1">
+                            <strong className="block text-slate-300 mb-1">2. Marginal Search (Organic)</strong>
                             Finding optimal parameters for the pure organic formula.
                         </span>
                     </li>
-                    <li className={`flex gap-3 items-start ${phase === Phase.HYBRID_SEARCH ? 'text-purple-300' : ''}`}>
+                    <li className={`flex gap-4 items-start ${phase === Phase.HYBRID_SEARCH ? 'text-purple-300' : ''}`}>
                          <div className={`mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${phase === Phase.HYBRID_SEARCH ? 'border-purple-500 bg-purple-500/20' : 'border-slate-600'}`}>
                             {phase === Phase.HYBRID_SEARCH && <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse" />}
                         </div>
-                        <span>
-                            <strong className="block text-slate-300">3. Hybrid Global Search</strong>
+                        <span className="flex-1">
+                            <strong className="block text-slate-300 mb-1">3. Hybrid Global Search</strong>
                             Using priors from steps 1 & 2 to find the synergistic sweet spot in the mixed system.
                         </span>
                     </li>
@@ -712,16 +821,20 @@ export default function App() {
         {/* Center & Right: Canvas and Charts */}
         <div className="lg:col-span-2 space-y-6">
             {/* The Visualizer */}
-            <OptimizationCanvas 
-                width={600} 
-                height={400} 
-                phase={phase}
-                points={points}
-                onAddPoint={() => {}}
-            />
+            <div className="flex justify-center">
+                <OptimizationCanvas 
+                    width={600} 
+                    height={375} 
+                    phase={phase}
+                    points={points}
+                    onAddPoint={() => {}}
+                />
+            </div>
 
             {/* The Trace Chart */}
-            <MetricsChart metricsHistory={metricsHistory} />
+            <div className="flex justify-center">
+                <MetricsChart metricsHistory={metricsHistory} />
+            </div>
         </div>
 
       </main>
