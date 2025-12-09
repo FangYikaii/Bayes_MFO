@@ -49,32 +49,46 @@ class TraceAwareKGOptimizer:
         self._define_parameter_spaces()
         
         # Store experiment data on the specified device
+        # 创建实验参数矩阵，用于存储参数数据
         self.X = torch.empty((0, len(self.param_names)), dtype=torch.float64, device=self.device)
+        # 创建目标参数矩阵
         self.Y = torch.empty((0, 3), dtype=torch.float64, device=self.device)  # Three objectives: uniformity, coverage, adhesion
+        
+        # 创建历史数据DataFrame，用于存储实验数据
         self.history = pd.DataFrame(columns=self.param_names + ["Uniformity", "Coverage", "Adhesion", "Timestamp"])
         
         # Multi-objective optimization settings on the specified device
+        # 用于多目标优化中的超级体计算，是评估优化性能的核心参数；帕累托前沿计算中的参考点；超体积的值越大前沿越优
+        # 一个解被称为帕累托最优（或非支配解），如果没有其他解能在不恶化至少一个目标的情况下，改进至少一个目标。
+        # 换句话说，在帕累托最优解处，任何目标的进一步优化都必然导致其他目标的退化。
         self.ref_point = torch.tensor([-0.1, -0.1, -0.1], dtype=torch.float64, device=self.device)
         
         # Optimization hyperparameters
-        self.num_restarts = 5  # Reduced from 20 to speed up computation
-        self.raw_samples = 16  # Reduced from 64 to speed up computation
-        self.batch_size = 5  # Reduced from 10 to speed up computation
-        self.n_init = 5
+        # 其实多次采样进行评估也是在优化采样的质量，极端一点：不至于老是采集到同一个点
+        self.num_restarts = 5  # 优化采集函数时的随机重启次数
+        self.raw_samples = 16  # 初始采样数
+        self.batch_size = 5  # 每次迭代同时评估的候选点数量
+        self.n_init = 5 # 初始样本数
         
         # Record lists
+        # 创建迭代历史列表，用于存储每次迭代的详细数据，结果值、目标值
         self.iteration_history = []
+        # 创建超体积历史列表，用于存储每次迭代的超体积值
         self.hypervolume_history = []
         
         # Optimization phases (1: simple systems, 2: complex systems)
+        # 用于控制简单系统（单一物质）的优化阶段
         self.phase = 1
+        # 用于控制简单系统（单一物质）的优化阶段迭代次数 与 帕累托超体积值一直去寻找最优解
         self.phase_1_iterations = 10  # Number of iterations in phase 1
         
         # Independent iteration counter
         self.current_iteration = 0
         
         # Cache for hypervolume computation
+        # 用于缓存超体积计算结果，避免重复计算
         self._cached_hv = None
+        # 用于缓存超体积计算结果的迭代次数
         self._cached_hv_iteration = -1
         
         self.seed = seed
@@ -115,15 +129,18 @@ class TraceAwareKGOptimizer:
         self.param_names = list(self.parameters.keys())
         
         # Create bounds on CPU first for safe printing
+        # 创建边界参数矩阵，用于存储参数的上下界
         bounds_cpu = torch.tensor([
             [param[0] for param in self.parameters.values()],
             [param[1] for param in self.parameters.values()]
         ], dtype=torch.float64)
         
         # Create steps on CPU first for safe printing
+        # 创建步长参数向量，用于存储参数的步长
         steps_cpu = torch.tensor([param[2] for param in self.parameters.values()])
         
         # Move tensors to the specified device
+        # 将边界参数矩阵和步长参数向量移动到指定的设备上
         self.bounds = bounds_cpu.to(self.device)
         self.steps = steps_cpu.to(self.device)
         
@@ -510,7 +527,7 @@ class TraceAwareKGOptimizer:
             if simulation_flag:
                 y = self.simulate_experiment(candidate)
             else:
-                # In real scenario, get human input
+                # 真实场景下需要人工输入: (此部分需要加速联动)
                 y = self.get_human_input(candidate)
             
             # Process observed values to handle saturated objectives

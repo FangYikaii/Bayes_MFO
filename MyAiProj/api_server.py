@@ -15,8 +15,9 @@ from botorch.utils.transforms import unnormalize
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'SemiConductor_3obj'))
 
 # 导入优化器类
-from src.tkg_optimizer import TraceAwareKGOptimizer
-from config import OUTPUT_DIR, FIGURE_DIR
+# 添加了SemiConductor_3obj前缀，方便 debug 代码
+from SemiConductor_3obj.src.tkg_optimizer import TraceAwareKGOptimizer
+from SemiConductor_3obj.config import OUTPUT_DIR, FIGURE_DIR
 
 # 创建FastAPI应用
 app = FastAPI(title="Bayesian Optimization API", version="1.0.0")

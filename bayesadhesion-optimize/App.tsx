@@ -140,18 +140,29 @@ export default function App() {
     }
   };
 
-  // Initialize data when component mounts
+  // Handle API toggle - Only check health, never auto-start optimization
   useEffect(() => {
-    const initData = async () => {
+    const handleApiToggle = async () => {
+      // Stop any running timers first
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      
       if (useRealApi) {
-        const isHealthy = await checkApiHealth();
-        if (isHealthy) {
-          await getOptimizationStatus();
-        }
+        // Only check API health when enabling Real API
+        // User must click "Start Search" to begin optimization
+        await checkApiHealth();
+      } else {
+        // When disabling Real API, reset to safe state
+        // This prevents auto-start when unchecking "Use Real API"
+        setApiStatus('Ready');
+        // Reset phase to IDLE to prevent timer from auto-starting mock simulation
+        setPhase(Phase.IDLE);
       }
     };
     
-    initData();
+    handleApiToggle();
   }, [useRealApi]);
 
   // Initialize Optimizer via API
@@ -342,6 +353,7 @@ export default function App() {
       setBestCoverage(0);
       setHypervolumeHistory([]);
       setMetricsHistory([]);
+      // 初始化优化阶段: 或许可以用来初始化刚开始探索的阶段，默认是氧化物阶段
       setPhase(Phase.OXIDE_ONLY);
       
       // Initialize optimizer
