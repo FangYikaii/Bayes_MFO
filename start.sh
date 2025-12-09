@@ -34,6 +34,13 @@ sleep 3
 echo "【INFO】Starting Frontend Application..."
 echo "========================================"
 cd ../bayesadhesion-optimize
+
+# 检查并安装依赖
+if [ ! -d "node_modules" ]; then
+    echo "【INFO】Installing frontend dependencies..."
+    npm install
+fi
+
 npm run dev &
 FRONTEND_PID=$!
 echo "Frontend Application started with PID: $FRONTEND_PID"
