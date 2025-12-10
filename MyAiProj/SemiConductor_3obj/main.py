@@ -1,7 +1,13 @@
 import argparse
 import torch
 from src.tkg_optimizer import TraceAwareKGOptimizer
-from config import OUTPUT_DIR, FIGURE_DIR
+from config import (
+    OUTPUT_DIR, 
+    FIGURE_DIR,
+    PHASE_1_OXIDE_MAX_ITERATIONS,
+    PHASE_1_ORGANIC_MAX_ITERATIONS,
+    PHASE_1_IMPROVEMENT_THRESHOLD
+)
 
 
 def detect_gpus():
@@ -51,8 +57,19 @@ def main(n_iter, device=None):
     
     try:
         # Try to use the specified device
-        optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42, device=final_device)
+        optimizer = TraceAwareKGOptimizer(
+            output_dir=output_dir, 
+            fig_dir=fig_dir, 
+            seed=42, 
+            device=final_device,
+            phase_1_oxide_max_iterations=PHASE_1_OXIDE_MAX_ITERATIONS,
+            phase_1_organic_max_iterations=PHASE_1_ORGANIC_MAX_ITERATIONS,
+            phase_1_improvement_threshold=PHASE_1_IMPROVEMENT_THRESHOLD
+        )
         print(f"Using device: {optimizer.device}")
+        print(f"Phase 1配置: 氧化物最大迭代={PHASE_1_OXIDE_MAX_ITERATIONS}, "
+              f"有机物最大迭代={PHASE_1_ORGANIC_MAX_ITERATIONS}, "
+              f"改进率阈值={PHASE_1_IMPROVEMENT_THRESHOLD}")
         
         # Run optimization
         optimizer.optimize(n_iter=n_iter, simulation_flag=True)
@@ -74,8 +91,19 @@ def main(n_iter, device=None):
             print("【INFO】Falling back to CPU...")
             
             # Re-initialize with CPU
-            optimizer = TraceAwareKGOptimizer(output_dir=output_dir, fig_dir=fig_dir, seed=42, device="cpu")
+            optimizer = TraceAwareKGOptimizer(
+                output_dir=output_dir, 
+                fig_dir=fig_dir, 
+                seed=42, 
+                device="cpu",
+                phase_1_oxide_max_iterations=PHASE_1_OXIDE_MAX_ITERATIONS,
+                phase_1_organic_max_iterations=PHASE_1_ORGANIC_MAX_ITERATIONS,
+                phase_1_improvement_threshold=PHASE_1_IMPROVEMENT_THRESHOLD
+            )
             print(f"Using device: {optimizer.device}")
+            print(f"Phase 1配置: 氧化物最大迭代={PHASE_1_OXIDE_MAX_ITERATIONS}, "
+                  f"有机物最大迭代={PHASE_1_ORGANIC_MAX_ITERATIONS}, "
+                  f"改进率阈值={PHASE_1_IMPROVEMENT_THRESHOLD}")
             
             # Run optimization on CPU
             optimizer.optimize(n_iter=n_iter, simulation_flag=True)

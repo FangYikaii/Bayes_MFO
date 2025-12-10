@@ -1,0 +1,7 @@
+# 忽略所有测试输出文件
+*.txt
+*.json
+
+# 但保留这个 .gitignore 文件
+!.gitignore
+

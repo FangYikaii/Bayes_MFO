@@ -9,9 +9,11 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>(Phase.IDLE);
   const [points, setPoints] = useState<Point[]>([]);
   const [iteration, setIteration] = useState(0);
+  const [totalIterations, setTotalIterations] = useState(0);  // 所有阶段的总迭代次数
   const [bestAdhesion, setBestAdhesion] = useState(0);
   const [bestUniformity, setBestUniformity] = useState(0);
   const [bestCoverage, setBestCoverage] = useState(0);
+  const [bestHypervolume, setBestHypervolume] = useState(0); // 本次运行的最大超体积
   const [isLoading, setIsLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState<string>('Ready');
   const [useRealApi, setUseRealApi] = useState(false);
@@ -27,7 +29,10 @@ export default function App() {
     nIter: 5,
     nInit: 5,
     batchSize: 3,
-    seed: 42
+    seed: 42,
+    phase1OxideMaxIterations: 5,
+    phase1OrganicMaxIterations: 5,
+    phase1ImprovementThreshold: 0.05  // 保留以兼容，但后端已不使用
   });
 
   // API Configuration
@@ -44,9 +49,11 @@ export default function App() {
     setPhase(Phase.IDLE);
     setPoints([]);
     setIteration(0);
+    setTotalIterations(0);
     setBestAdhesion(0);
     setBestUniformity(0);
     setBestCoverage(0);
+    setBestHypervolume(0); // 重置本次运行的最大超体积
     setHypervolumeHistory([]);
     setMetricsHistory([]);
     setApiStatus('Ready');
@@ -79,40 +86,49 @@ export default function App() {
         // Update hypervolume history
         if (data.hypervolume_history && data.hypervolume_history.length > 0) {
           setHypervolumeHistory(data.hypervolume_history);
+          // Update best hypervolume (本次运行的最大值)
+          // Hypervolume 不需要归一化，直接使用后端返回的值
+          const latestHv = data.hypervolume_history[data.hypervolume_history.length - 1];
+          setBestHypervolume(prev => Math.max(prev, latestHv));
         }
         
         // Update iteration count
         const currentIter = data.current_iteration || data.iteration || 0;
+        const currentTotalIterations = data.total_iterations || 0;  // 获取总迭代次数
         setIteration(currentIter);
+        setTotalIterations(currentTotalIterations);
         
         // Update metrics from status if available
         if (data.multi_objective_results) {
           const results = data.multi_objective_results;
           if (results.max_adhesion !== undefined) {
-            setBestAdhesion(results.max_adhesion);
+            const normalizedAdhesion = results.max_adhesion > 1 ? results.max_adhesion / 100 : results.max_adhesion;
+            setBestAdhesion(prev => Math.max(prev, normalizedAdhesion));
           }
           if (results.max_uniformity !== undefined) {
-            setBestUniformity(results.max_uniformity);
+            setBestUniformity(prev => Math.max(prev, results.max_uniformity));
           }
           if (results.max_coverage !== undefined) {
-            setBestCoverage(results.max_coverage);
+            setBestCoverage(prev => Math.max(prev, results.max_coverage));
           }
           
           // Update metrics history from status if we have the data
-          if (currentIter > 0 && data.hypervolume_history && data.hypervolume_history.length > 0) {
+          // 使用总迭代次数作为图表的 x 轴，这样所有阶段的数据会连续显示
+          const chartIteration = totalIterations;
+          if (chartIteration > 0 && data.hypervolume_history && data.hypervolume_history.length > 0) {
             const hypervolume = results.hypervolume || data.hypervolume_history[data.hypervolume_history.length - 1] || 0;
-            const normalizedHypervolume = hypervolume > 1 ? hypervolume / 100 : hypervolume;
+            // Hypervolume 不需要归一化，直接使用后端返回的值
             const normalizedAdhesion = (results.max_adhesion || 0) > 1 ? (results.max_adhesion || 0) / 100 : (results.max_adhesion || 0);
             
             setMetricsHistory(prev => {
-              const existingIndex = prev.findIndex(item => item.iteration === currentIter);
+              const existingIndex = prev.findIndex(item => item.iteration === chartIteration);
               if (existingIndex < 0) {
                 return [...prev, {
-                  iteration: currentIter,
+                  iteration: chartIteration,  // 使用总迭代次数
                   uniformity: results.max_uniformity || 0,
                   coverage: results.max_coverage || 0,
                   adhesion: normalizedAdhesion,
-                  hypervolume: normalizedHypervolume
+                  hypervolume: hypervolume  // 直接使用，不归一化
                 }];
               }
               return prev;
@@ -121,11 +137,29 @@ export default function App() {
         }
         
         // Update phase based on backend response
-        if (data.phase === 1 || data.phase === 'OXIDE ONLY') {
-          setPhase(Phase.OXIDE_ONLY);
-        } else if (data.phase === 2 || data.phase === 'ORGANIC OPTIMIZATION') {
-          setPhase(Phase.ORGANIC_ONLY);
-        } else if (data.phase === 3 || data.phase === 'HYBRID GLOBAL SEARCH') {
+        // 使用后端返回的phase和phase_1_subphase来准确显示阶段
+        // 注意：data.phase 可能是数字或字符串
+        const phaseValue = typeof data.phase === 'string' ? data.phase : data.phase_number || data.phase;
+        
+        if (phaseValue === 1 || phaseValue === 'OXIDE ONLY' || phaseValue === 'ORGANIC OPTIMIZATION') {
+          // Phase 1: 根据phase_1_subphase准确显示当前子阶段
+          if (data.phase_1_subphase === 'oxide') {
+            setPhase(Phase.OXIDE_ONLY);
+          } else if (data.phase_1_subphase === 'organic') {
+            setPhase(Phase.ORGANIC_ONLY);
+          } else {
+            // 如果没有subphase信息，根据 phase 字符串判断
+            if (phaseValue === 'OXIDE ONLY') {
+              setPhase(Phase.OXIDE_ONLY);
+            } else if (phaseValue === 'ORGANIC OPTIMIZATION') {
+              setPhase(Phase.ORGANIC_ONLY);
+            } else {
+              // 默认从oxide开始
+              setPhase(Phase.OXIDE_ONLY);
+            }
+          }
+        } else if (phaseValue === 2 || phaseValue === 'HYBRID GLOBAL SEARCH') {
+          // Phase 2: complex systems (Hybrid Search)
           setPhase(Phase.HYBRID_SEARCH);
         }
         
@@ -175,7 +209,12 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ seed: algorithmParams.seed })
+        body: JSON.stringify({ 
+          seed: algorithmParams.seed,
+          phase_1_oxide_max_iterations: algorithmParams.phase1OxideMaxIterations,
+          phase_1_organic_max_iterations: algorithmParams.phase1OrganicMaxIterations
+          // phase_1_improvement_threshold 已移除，后端不再使用
+        })
       });
       
       if (response.ok) {
@@ -215,41 +254,117 @@ export default function App() {
         
         // Get actual iteration number from backend
         const actualIteration = data.iteration;
+        const currentTotalIterations = data.total_iterations || 0;  // 获取总迭代次数
         
-        setApiStatus(`Running Iteration ${actualIteration}...`);
+        // 更新总迭代次数状态
+        setTotalIterations(currentTotalIterations);
+        
+        setApiStatus(`Running Iteration ${actualIteration} (Total: ${currentTotalIterations}/${algorithmParams.nIter})...`);
         
         // Update hypervolume history
         if (data.hypervolume_history && data.hypervolume_history.length > 0) {
           setHypervolumeHistory(data.hypervolume_history);
+          // Update best hypervolume (本次运行的最大值)
+          // Hypervolume 不需要归一化，直接使用后端返回的值
+          const latestHv = data.hypervolume_history[data.hypervolume_history.length - 1];
+          setBestHypervolume(prev => Math.max(prev, latestHv));
         }
         
         // Get the latest iteration result
         const latestIteration = data.iteration_result;
         
         // Convert API results to frontend points format
-        const newPoints = latestIteration.candidates.map((candidate: any, idx: number) => ({
-          id: actualIteration * 100 + idx,
-          x: candidate[0] / 21, // Normalize to 0-1
-          y: candidate[1] / 10,  // Normalize to 0-1
-          value: candidate[11] || 0, // Combined value
-          phase: Phase.HYBRID_SEARCH, // Map API phase to frontend phase
-          iteration: actualIteration
-        }));
+        // 根据当前阶段确定点的坐标映射
+        let currentPhaseEnum = Phase.HYBRID_SEARCH;
+        if (data.phase === 1) {
+          if (data.phase_1_subphase === 'oxide') {
+            currentPhaseEnum = Phase.OXIDE_ONLY;
+          } else if (data.phase_1_subphase === 'organic') {
+            currentPhaseEnum = Phase.ORGANIC_ONLY;
+          }
+        }
+        
+        // 如果有阶段切换，使用新阶段
+        if (data.should_switch_phase && data.new_phase !== undefined) {
+          if (data.new_phase === 1) {
+            if (data.new_phase_1_subphase === 'oxide') {
+              currentPhaseEnum = Phase.OXIDE_ONLY;
+            } else if (data.new_phase_1_subphase === 'organic') {
+              currentPhaseEnum = Phase.ORGANIC_ONLY;
+            }
+          } else if (data.new_phase === 2) {
+            currentPhaseEnum = Phase.HYBRID_SEARCH;
+          }
+        }
+        
+        // 根据阶段映射参数到可视化坐标
+        // 注意：candidates 是当前阶段的有效参数，需要根据阶段确定如何映射
+        const newPoints = latestIteration.candidates.map((candidate: any, idx: number) => {
+          // 对于 Phase 1 Oxide: 使用 metal 参数作为 x, y
+          // 对于 Phase 1 Organic: 使用 organic 参数作为 x, y
+          // 对于 Phase 2: 使用所有参数，但可视化时可能需要选择两个主要参数
+          let x = 0, y = 0;
+          
+          if (currentPhaseEnum === Phase.OXIDE_ONLY) {
+            // Phase 1 Oxide: candidate 包含 metal 参数和 condition
+            // 假设前两个参数是 metal_a_type 和 metal_a_concentration
+            x = candidate[0] ? (candidate[0] - 1) / 19 : 0; // metal_a_type: 1-20 -> 0-1
+            y = candidate[1] ? (candidate[1] - 10) / 40 : 0; // metal_a_concentration: 10-50 -> 0-1
+          } else if (currentPhaseEnum === Phase.ORGANIC_ONLY) {
+            // Phase 1 Organic: candidate 包含 organic 参数和 condition
+            // 假设前两个参数是 organic_formula 和 organic_concentration
+            x = candidate[0] ? (candidate[0] - 1) / 29 : 0; // organic_formula: 1-30 -> 0-1
+            y = candidate[1] ? (candidate[1] - 0.1) / 4.9 : 0; // organic_concentration: 0.1-5 -> 0-1
+          } else {
+            // Phase 2: 使用混合参数，选择代表性的两个参数
+            // 使用 organic_formula 和 metal_a_type 作为 x, y
+            x = candidate[0] ? (candidate[0] - 1) / 29 : 0; // 假设第一个是 organic_formula
+            y = candidate[6] ? (candidate[6] - 1) / 19 : 0; // 假设第7个是 metal_a_type (索引6)
+          }
+          
+          // 获取对应的 Y 值（从所有 Y 值中取最后 candidatesCount 个）
+          const allYValues = latestIteration?.Y || [];
+          const candidatesCount = latestIteration?.candidates?.length || 0;
+          let yValue = 0;
+          if (allYValues && allYValues.length > 0 && candidatesCount > 0) {
+            // 获取最新一批的 Y 值
+            const recentYValues = allYValues.slice(-candidatesCount);
+            if (recentYValues[idx] && Array.isArray(recentYValues[idx]) && recentYValues[idx].length >= 3) {
+              // 使用三个目标的平均值作为 value
+              const uniformity = recentYValues[idx][0];
+              const coverage = recentYValues[idx][1];
+              const adhesion = recentYValues[idx][2];
+              const normalizedAdhesion = adhesion > 1 ? adhesion / 100 : adhesion;
+              yValue = (uniformity + coverage + normalizedAdhesion) / 3;
+            }
+          }
+          
+          return {
+            id: actualIteration * 100 + idx,
+            x: Math.max(0, Math.min(1, x)), // 确保在 0-1 范围内
+            y: Math.max(0, Math.min(1, y)),
+            value: yValue,
+            phase: currentPhaseEnum,
+            iteration: actualIteration
+          };
+        });
         
         // Update points
         setPoints(prev => [...prev, ...newPoints]);
         
         // Update metrics
         // Get all objectives from the latest Y values
-        const latestYValues = data.iteration_result?.Y;
+        // latestIteration.Y 包含所有历史样本的目标值，我们需要获取最新一批的
+        const allYValues = latestIteration?.Y || [];
+        const candidatesCount = latestIteration?.candidates?.length || 0;
         let batchUniformity = 0;
         let batchCoverage = 0;
         let batchAdhesion = 0;
         
-        if (latestYValues && latestYValues.length > 0) {
-          // Get the latest Y values (last batch)
-          const lastBatchSize = data.iteration_result.candidates?.length || latestYValues.length;
-          const recentYValues = latestYValues.slice(-lastBatchSize);
+        if (allYValues && allYValues.length > 0 && candidatesCount > 0) {
+          // Get the latest Y values (last batch of candidates)
+          // Y 数组包含所有历史样本，最后 candidatesCount 个是最新一批的
+          const recentYValues = allYValues.slice(-candidatesCount);
           
           // Update best values for all three objectives
           recentYValues.forEach((y: number[]) => {
@@ -264,7 +379,9 @@ export default function App() {
               
               setBestUniformity(prev => Math.max(prev, uniformity));
               setBestCoverage(prev => Math.max(prev, coverage));
-              setBestAdhesion(prev => Math.max(prev, adhesion));
+              // Adhesion 可能需要归一化（如果后端返回的是 0-100 范围）
+              const normalizedAdhesion = adhesion > 1 ? adhesion / 100 : adhesion;
+              setBestAdhesion(prev => Math.max(prev, normalizedAdhesion));
             }
           });
         }
@@ -278,30 +395,37 @@ export default function App() {
         
         // Ensure values are in 0-1 range (normalize if needed)
         const normalizedAdhesion = adhesionValue > 1 ? adhesionValue / 100 : adhesionValue;
-        const normalizedHypervolume = currentHypervolume > 1 ? currentHypervolume / 100 : currentHypervolume;
+        // Hypervolume 不需要归一化，直接使用后端返回的值
+        const hypervolumeValue = currentHypervolume;
+        
+        // Update best hypervolume (本次运行的最大值)
+        setBestHypervolume(prev => Math.max(prev, hypervolumeValue));
+        
+        // 使用总迭代次数作为图表的 x 轴，这样所有阶段的数据会连续显示
+        const chartIteration = currentTotalIterations;
         
         setMetricsHistory(prev => {
           // Check if this iteration already exists to avoid duplicates
-          const existingIndex = prev.findIndex(item => item.iteration === actualIteration);
+          const existingIndex = prev.findIndex(item => item.iteration === chartIteration);
           if (existingIndex >= 0) {
             // Update existing entry
             const updated = [...prev];
             updated[existingIndex] = {
-              iteration: actualIteration,
+              iteration: chartIteration,  // 使用总迭代次数
               uniformity: uniformityValue,
               coverage: coverageValue,
               adhesion: normalizedAdhesion,
-              hypervolume: normalizedHypervolume
+              hypervolume: hypervolumeValue  // 直接使用，不归一化
             };
             return updated;
           } else {
             // Add new entry
             return [...prev, {
-              iteration: actualIteration,
+              iteration: chartIteration,  // 使用总迭代次数
               uniformity: uniformityValue,
               coverage: coverageValue,
               adhesion: normalizedAdhesion,
-              hypervolume: normalizedHypervolume
+              hypervolume: hypervolumeValue  // 直接使用，不归一化
             }];
           }
         });
@@ -310,15 +434,37 @@ export default function App() {
         setIteration(actualIteration);
         
         // Update phase based on backend response
-        // Map backend phase (1, 2) to frontend Phase enum
-        if (data.phase === 1) {
-          // Phase 1: simple systems (Oxide Only or Organic Only)
-          // For visualization purposes, we'll alternate between Oxide Only and Organic Only
-          const currentPhase = actualIteration % 2 === 1 ? Phase.OXIDE_ONLY : Phase.ORGANIC_ONLY;
-          setPhase(currentPhase);
-        } else if (data.phase === 2) {
-          // Phase 2: complex systems (Hybrid Search)
-          setPhase(Phase.HYBRID_SEARCH);
+        // 优先处理阶段切换：如果有 new_phase，说明已经切换了阶段
+        if (data.should_switch_phase && data.new_phase !== undefined) {
+          // 阶段已经切换，使用新阶段信息
+          if (data.new_phase === 1) {
+            if (data.new_phase_1_subphase === 'oxide') {
+              setPhase(Phase.OXIDE_ONLY);
+            } else if (data.new_phase_1_subphase === 'organic') {
+              setPhase(Phase.ORGANIC_ONLY);
+            } else {
+              setPhase(Phase.OXIDE_ONLY);
+            }
+          } else if (data.new_phase === 2) {
+            setPhase(Phase.HYBRID_SEARCH);
+          }
+        } else {
+          // 没有阶段切换，使用当前阶段信息
+          if (data.phase === 1) {
+            // Phase 1: simple systems (Oxide Only or Organic Only)
+            // 根据phase_1_subphase准确显示当前子阶段
+            if (data.phase_1_subphase === 'oxide') {
+              setPhase(Phase.OXIDE_ONLY);
+            } else if (data.phase_1_subphase === 'organic') {
+              setPhase(Phase.ORGANIC_ONLY);
+            } else {
+              // 如果没有subphase信息，默认从oxide开始
+              setPhase(Phase.OXIDE_ONLY);
+            }
+          } else if (data.phase === 2) {
+            // Phase 2: complex systems (Hybrid Search)
+            setPhase(Phase.HYBRID_SEARCH);
+          }
         }
         
         return data;
@@ -348,9 +494,11 @@ export default function App() {
       // Reset all states before starting new optimization
       setPoints([]);
       setIteration(0);
+      setTotalIterations(0);
       setBestAdhesion(0);
       setBestUniformity(0);
       setBestCoverage(0);
+      setBestHypervolume(0); // 重置本次运行的最大超体积
       setHypervolumeHistory([]);
       setMetricsHistory([]);
       // 初始化优化阶段: 或许可以用来初始化刚开始探索的阶段，默认是氧化物阶段
@@ -363,15 +511,55 @@ export default function App() {
       iterationRef.current = 0;
       totalIterationsRef.current = algorithmParams.nIter;
       
-      // Run exactly nIter iterations, regardless of backend return value
-      for (let i = 1; i <= algorithmParams.nIter; i++) {
-        await runSingleIteration();
-        
-        // Also fetch status to ensure all metrics are updated
-        await getOptimizationStatus();
-        
-        // Small delay to show real-time updates
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Run iterations with proper phase handling
+      // 注意：后端会根据阶段切换逻辑自动管理迭代，前端根据总迭代次数判断是否停止
+      let consecutiveErrors = 0;
+      const maxErrors = 3;
+      const targetTotalIterations = algorithmParams.nIter;  // 目标总迭代次数
+      
+      // 使用 while 循环，根据后端返回的总迭代次数判断是否停止
+      while (true) {
+        try {
+          const result = await runSingleIteration();
+          
+          // 检查是否达到目标总迭代次数
+          const currentTotalIterations = result?.total_iterations || 0;
+          if (currentTotalIterations >= targetTotalIterations) {
+            console.log(`Reached target total iterations: ${currentTotalIterations}/${targetTotalIterations}`);
+            break;
+          }
+          
+          // 如果后端返回阶段切换，需要重新获取状态以确保同步
+          if (result && result.should_switch_phase && result.new_phase !== undefined) {
+            console.log(`Phase switched: ${result.current_phase} -> ${result.new_phase}`);
+            
+            // 如果是切换到 Phase 2，显示初始样本信息
+            if (result.phase_2_initial_samples) {
+              console.log(`Phase 2 initial samples: ${result.phase_2_initial_samples.count} samples`);
+              console.log(`Phase 2 initial samples X:`, result.phase_2_initial_samples.X);
+              console.log(`Phase 2 initial samples Y:`, result.phase_2_initial_samples.Y);
+            }
+            
+            // 重新获取状态以确保所有信息同步
+            await getOptimizationStatus();
+          }
+          
+          // Also fetch status to ensure all metrics are updated
+          await getOptimizationStatus();
+          
+          // Small delay to show real-time updates
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          consecutiveErrors = 0; // Reset error counter on success
+        } catch (error) {
+          console.error(`Iteration failed:`, error);
+          consecutiveErrors++;
+          if (consecutiveErrors >= maxErrors) {
+            throw new Error(`Too many consecutive errors (${maxErrors})`);
+          }
+          // Continue to next iteration even if one fails
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
       
       setApiStatus('Optimization Complete');
@@ -407,10 +595,8 @@ export default function App() {
           return;
         }
         
-        // Initialize Optimizer
-        await initOptimizer();
-        
         // Run Optimization with algorithm parameters
+        // Note: initOptimizer() is called inside runOptimization() to avoid duplicate initialization
         await runOptimization();
         
       } catch (error) {
@@ -713,6 +899,57 @@ export default function App() {
                     </div>
                 </div>
                 
+                {/* Phase 1 Advanced Parameters */}
+                <div className="mt-6 pt-6 border-t border-slate-800">
+                    <h3 className="text-sm uppercase tracking-wider text-sky-400 font-bold mb-4">Phase 1 Advanced Parameters</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                Oxide Max Iterations
+                                <span className="ml-2 text-xs text-slate-500">(Phase 1氧化物阶段)</span>
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="20"
+                                step="1"
+                                value={algorithmParams.phase1OxideMaxIterations}
+                                onChange={(e) => setAlgorithmParams(prev => ({ ...prev, phase1OxideMaxIterations: parseInt(e.target.value) }))}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                            />
+                            <p className="text-xs text-slate-500 mt-1">氧化物阶段最大迭代次数</p>
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm font-medium text-slate-400 mb-2">
+                                Organic Max Iterations
+                                <span className="ml-2 text-xs text-slate-500">(Phase 1有机物阶段)</span>
+                            </label>
+                            <input
+                                type="number"
+                                min="1"
+                                max="20"
+                                step="1"
+                                value={algorithmParams.phase1OrganicMaxIterations}
+                                onChange={(e) => setAlgorithmParams(prev => ({ ...prev, phase1OrganicMaxIterations: parseInt(e.target.value) }))}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
+                            />
+                            <p className="text-xs text-slate-500 mt-1">有机物阶段最大迭代次数</p>
+                        </div>
+                        
+                    </div>
+                    <div className="mt-4 p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                        <p className="text-xs text-slate-400">
+                            <strong className="text-slate-300">说明：</strong>Phase 1分为两个子阶段（氧化物和有机物）。
+                            当达到各自的最大迭代次数时，将自动切换到下一阶段。Phase 2（混合阶段）将使用前两个阶段的最优参数组合作为初始样本。
+                        </p>
+                        <p className="text-xs text-slate-400 mt-2">
+                            <strong className="text-slate-300">总迭代次数：</strong>Number of Iterations 控制所有阶段加起来的总迭代次数。
+                            各阶段会按顺序运行，直到达到总迭代次数。
+                        </p>
+                    </div>
+                </div>
+                
                 <div className="mt-4 text-xs text-slate-500">
                     <p>Adjust these parameters to control the optimization process. Click "Start Search" to apply changes.</p>
                 </div>
@@ -751,6 +988,13 @@ export default function App() {
                         <span className="font-mono text-xl">{iteration}</span>
                     </div>
 
+                    <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                        <span className="text-slate-400">Total Iterations</span>
+                        <span className="font-mono text-lg">
+                            {totalIterations}/{algorithmParams.nIter}
+                        </span>
+                    </div>
+
                     {/* Multi-objective Metrics */}
                     <div className="space-y-3 pt-2">
                         <h3 className="text-xs uppercase tracking-wider text-slate-500 font-bold">Multi-objective Results</h3>
@@ -759,28 +1003,28 @@ export default function App() {
                             <div className="bg-slate-800 rounded-lg p-3">
                                 <div className="text-xs text-slate-500">Max Adhesion</div>
                                 <div className="font-mono text-lg font-bold text-yellow-400">
-                                    {bestAdhesion.toFixed(1)} N/m
+                                    {bestAdhesion.toFixed(4)}
                                 </div>
                             </div>
                             
                             <div className="bg-slate-800 rounded-lg p-3">
                                 <div className="text-xs text-slate-500">Max Uniformity</div>
                                 <div className="font-mono text-xl font-bold text-purple-400">
-                                    {bestUniformity.toFixed(2)}
+                                    {bestUniformity.toFixed(4)}
                                 </div>
                             </div>
                             
                             <div className="bg-slate-800 rounded-lg p-3">
                                 <div className="text-xs text-slate-500">Max Coverage</div>
                                 <div className="font-mono text-xl font-bold text-green-400">
-                                    {bestCoverage.toFixed(2)}
+                                    {bestCoverage.toFixed(4)}
                                 </div>
                             </div>
                             
                             <div className="bg-slate-800 rounded-lg p-3">
                                 <div className="text-xs text-slate-500">Hypervolume</div>
                                 <div className="font-mono text-xl font-bold text-blue-400">
-                                    {hypervolumeHistory.length > 0 ? hypervolumeHistory[hypervolumeHistory.length - 1].toFixed(4) : '0.0000'}
+                                    {bestHypervolume.toFixed(4)}
                                 </div>
                             </div>
                         </div>

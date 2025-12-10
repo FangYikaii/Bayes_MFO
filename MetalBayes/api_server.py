@@ -7,14 +7,15 @@ import sys
 from datetime import datetime
 
 # 添加项目路径以便导入模型
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'SemiConductor_3obj'))
+project_root = os.path.abspath(os.path.dirname(__file__))
+src_path = os.path.join(project_root, 'src')
+sys.path.insert(0, src_path)
 
 # 导入 OptimizerManager
-from SemiConductor_3obj.src.optimizer_manager import OptimizerManager
-from SemiConductor_3obj.config import OUTPUT_DIR, FIGURE_DIR
+from src.OptimizerManager import OptimizerManager
 
 # 创建FastAPI应用
-app = FastAPI(title="Bayesian Optimization API", version="1.0.0")
+app = FastAPI(title="MetalBayes Optimization API", version="1.0.0")
 
 # 允许跨域请求
 app.add_middleware(
@@ -35,7 +36,6 @@ class InitOptimizerRequest(BaseModel):
     seed: int = 42
     phase_1_oxide_max_iterations: int = 5
     phase_1_organic_max_iterations: int = 5
-    phase_1_improvement_threshold: float = 0.05
 
 # 初始化优化器
 @app.post("/api/init")
@@ -44,14 +44,21 @@ async def init_optimizer(request: InitOptimizerRequest = InitOptimizerRequest())
     global global_optimizer_manager, global_optimizer_running
     
     try:
+        # 设置输出目录
+        output_dir = os.path.join(project_root, 'data', 'output')
+        fig_dir = os.path.join(project_root, 'data', 'figures')
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
+        
         # 创建新的优化器管理器实例，重置所有状态
         global_optimizer_manager = OptimizerManager(
-            output_dir=OUTPUT_DIR,
-            fig_dir=FIGURE_DIR,
+            output_dir=output_dir,
+            fig_dir=fig_dir,
             seed=request.seed,
             phase_1_oxide_max_iterations=request.phase_1_oxide_max_iterations,
-            phase_1_organic_max_iterations=request.phase_1_organic_max_iterations,
-            phase_1_improvement_threshold=request.phase_1_improvement_threshold
+            phase_1_organic_max_iterations=request.phase_1_organic_max_iterations
         )
         global_optimizer_running = False
         
@@ -61,8 +68,8 @@ async def init_optimizer(request: InitOptimizerRequest = InitOptimizerRequest())
         return {
             "success": True,
             "message": "Optimizer initialized successfully",
-            "param_names": current_optimizer.active_param_names,
-            "bounds": current_optimizer.active_bounds.cpu().numpy().tolist(),
+            "param_names": current_optimizer.param_names,
+            "bounds": current_optimizer.param_bounds.cpu().numpy().tolist(),
             "phase": global_optimizer_manager.current_phase
         }
     except Exception as e:
@@ -102,6 +109,9 @@ async def optimize_step(request: OptimizeStepRequest):
         current_phase = result['phase']
         phase_iteration = result['phase_iteration']
         should_switch_phase = result['should_switch_phase']
+        
+        # 计算总迭代次数（所有阶段的迭代次数总和）
+        total_iterations = sum(global_optimizer_manager.phase_iterations.values())
         
         # 转换阶段为前端期望的格式
         phase_map = {
@@ -144,6 +154,7 @@ async def optimize_step(request: OptimizeStepRequest):
             "phase_1_subphase": phase_1_subphase,
             "should_switch_phase": should_switch_phase,  # 反馈前端是否应该切换阶段
             "phase_iteration": phase_iteration,  # 当前阶段的迭代次数
+            "total_iterations": total_iterations,  # 所有阶段的总迭代次数
             "current_phase": current_phase  # 当前阶段名称
         }
         
@@ -160,6 +171,16 @@ async def optimize_step(request: OptimizeStepRequest):
             response['new_phase'] = new_phase_number
             response['new_phase_1_subphase'] = new_phase_1_subphase
             response['old_phase'] = result.get('old_phase', current_phase)
+            
+            # 如果是切换到 Phase 2，添加初始样本信息
+            if new_phase == OptimizerManager.PHASE_2:
+                new_optimizer = global_optimizer_manager.get_current_optimizer()
+                if new_optimizer.X.shape[0] > 0:
+                    response['phase_2_initial_samples'] = {
+                        "count": new_optimizer.X.shape[0],
+                        "X": new_optimizer.X.cpu().numpy().tolist()[:5],  # 只返回前5个样本
+                        "Y": new_optimizer.Y.cpu().numpy().tolist()[:5]
+                    }
         
         # 添加迭代结果详情
         if latest_iteration:
@@ -227,14 +248,20 @@ async def get_status():
         elif current_phase == OptimizerManager.PHASE_1_ORGANIC:
             phase_1_subphase = 'organic'
         
-        # 获取实验统计信息
-        experiment_stats = optimizer.get_experiment_stats()
+        # 计算总迭代次数（所有阶段的迭代次数总和）
+        total_iterations = sum(global_optimizer_manager.phase_iterations.values())
         
         # 计算多目标结果
-        max_adhesion = float(experiment_stats["objectives"]["adhesion"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        max_uniformity = float(experiment_stats["objectives"]["uniformity"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        max_coverage = float(experiment_stats["objectives"]["coverage"]["max"]) if experiment_stats["total_experiments"] > 0 else 0.0
-        hypervolume = float(experiment_stats["hypervolume"]) if experiment_stats["total_experiments"] > 0 else 0.0
+        max_adhesion = 0.0
+        max_uniformity = 0.0
+        max_coverage = 0.0
+        hypervolume = 0.0
+        
+        if optimizer.Y.shape[0] > 0:
+            max_adhesion = float(optimizer.Y[:, 2].max().item())
+            max_uniformity = float(optimizer.Y[:, 0].max().item())
+            max_coverage = float(optimizer.Y[:, 1].max().item())
+            hypervolume = float(status['hypervolume'])
         
         return {
             "success": True,
@@ -243,6 +270,7 @@ async def get_status():
             "phase_number": phase_number,
             "phase_1_subphase": phase_1_subphase,
             "iteration": status['phase_iteration'],
+            "total_iterations": total_iterations,  # 所有阶段的总迭代次数
             "multi_objective_results": {
                 "max_adhesion": max_adhesion,
                 "max_uniformity": max_uniformity,
@@ -256,8 +284,47 @@ async def get_status():
                 "X": pareto_x.cpu().numpy().tolist(),
                 "Y": pareto_y.cpu().numpy().tolist()
             },
-            "experiment_stats": experiment_stats,
-            "algorithm_info": optimizer.get_algorithm_info()
+            "experiment_stats": {
+                "total_experiments": optimizer.X.shape[0],
+                "total_iterations": total_iterations,  # 所有阶段的总迭代次数
+                "current_phase_iterations": len(optimizer.iteration_history),  # 当前阶段的迭代次数
+                "phase_iterations": {  # 各阶段的迭代次数
+                    phase_name: iterations 
+                    for phase_name, iterations in global_optimizer_manager.phase_iterations.items()
+                },
+                "pareto_solutions": len(pareto_x),
+                "current_phase": current_phase,
+                "hypervolume": hypervolume,
+                "objectives": {
+                    "uniformity": {
+                        "min": float(optimizer.Y[:, 0].min().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "max": float(optimizer.Y[:, 0].max().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "mean": float(optimizer.Y[:, 0].mean().item()) if optimizer.Y.shape[0] > 0 else 0.0
+                    },
+                    "coverage": {
+                        "min": float(optimizer.Y[:, 1].min().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "max": float(optimizer.Y[:, 1].max().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "mean": float(optimizer.Y[:, 1].mean().item()) if optimizer.Y.shape[0] > 0 else 0.0
+                    },
+                    "adhesion": {
+                        "min": float(optimizer.Y[:, 2].min().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "max": float(optimizer.Y[:, 2].max().item()) if optimizer.Y.shape[0] > 0 else 0.0,
+                        "mean": float(optimizer.Y[:, 2].mean().item()) if optimizer.Y.shape[0] > 0 else 0.0
+                    }
+                }
+            },
+            "algorithm_info": {
+                "name": "Trace-Aware Knowledge Gradient (taKG)",
+                "acquisition_function": "qLogExpectedHypervolumeImprovement",
+                "phase": current_phase,
+                "hyperparameters": {
+                    "batch_size": optimizer.batch_size,
+                    "num_restarts": optimizer.num_restarts,
+                    "raw_samples": optimizer.raw_samples,
+                    "n_init": optimizer.n_init
+                },
+                "optimization_objectives": ["Uniformity", "Coverage", "Adhesion"]
+            }
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get status: {str(e)}")
@@ -307,129 +374,6 @@ async def get_algorithm_strategy():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get algorithm strategy: {str(e)}")
 
-# 获取热力图数据
-@app.get("/api/heatmap_data")
-async def get_heatmap_data(
-    param1: str = Query("formula", description="First parameter name"),
-    param2: str = Query("concentration", description="Second parameter name"),
-    n_grid: int = Query(20, description="Grid size for heatmap")
-):
-    """获取热力图数据"""
-    global global_optimizer_manager
-    if global_optimizer_manager is None:
-        raise HTTPException(status_code=400, detail="Optimizer not initialized")
-    
-    try:
-        optimizer = global_optimizer_manager.get_current_optimizer()
-        
-        # Get parameter indices
-        if param1 not in optimizer.param_names:
-            raise HTTPException(status_code=400, detail=f"Parameter {param1} not found")
-        param1_idx = optimizer.param_names.index(param1)
-        
-        if param2 not in optimizer.param_names:
-            raise HTTPException(status_code=400, detail=f"Parameter {param2} not found")
-        param2_idx = optimizer.param_names.index(param2)
-        
-        # Generate heatmap data
-        heatmap_data = optimizer.get_heatmap_data(param1_idx, param2_idx, n_grid)
-        
-        # 如果还没有实验数据，返回默认的热力图数据
-        if heatmap_data is None:
-            import torch
-            default_grid = torch.linspace(0, 1, n_grid, device=optimizer.device)
-            default_heatmap = torch.zeros((n_grid, n_grid, 3), device=optimizer.device)
-            
-            heatmap_data = {
-                "param1_name": param1,
-                "param2_name": param2,
-                "param1_grid": default_grid.cpu().numpy().tolist(),
-                "param2_grid": default_grid.cpu().numpy().tolist(),
-                "mean": default_heatmap.cpu().numpy().tolist(),
-                "variance": default_heatmap.cpu().numpy().tolist(),
-                "objectives": ["Uniformity", "Coverage", "Adhesion"]
-            }
-        
-        # 构建符合前端期望的热力图格式
-        def extract_objective_data(data, objective_idx):
-            """从热力图数据中提取指定目标的数据"""
-            result = []
-            for row in data:
-                row_data = []
-                for cell in row:
-                    row_data.append(cell[objective_idx])
-                result.append(row_data)
-            return result
-        
-        frontend_heatmap = {
-            "parameter1": {
-                "name": heatmap_data["param1_name"],
-                "min": min(heatmap_data["param1_grid"]),
-                "max": max(heatmap_data["param1_grid"]),
-                "grid": heatmap_data["param1_grid"]
-            },
-            "parameter2": {
-                "name": heatmap_data["param2_name"],
-                "min": min(heatmap_data["param2_grid"]),
-                "max": max(heatmap_data["param2_grid"]),
-                "grid": heatmap_data["param2_grid"]
-            },
-            "heatmap_data": {
-                "uniformity": {
-                    "mean": extract_objective_data(heatmap_data["mean"], 0),
-                    "variance": extract_objective_data(heatmap_data["variance"], 0)
-                },
-                "coverage": {
-                    "mean": extract_objective_data(heatmap_data["mean"], 1),
-                    "variance": extract_objective_data(heatmap_data["variance"], 1)
-                },
-                "adhesion": {
-                    "mean": extract_objective_data(heatmap_data["mean"], 2),
-                    "variance": extract_objective_data(heatmap_data["variance"], 2)
-                }
-            },
-            "objectives": heatmap_data["objectives"],
-            "current_phase": optimizer.phase,
-            "phase_description": "Phase 1: Simple systems (only organic or only oxide)" if optimizer.phase == 1 else "Phase 2: Complex systems (both organic and oxide)"
-        }
-        
-        return {
-            "success": True,
-            "heatmap_data": frontend_heatmap
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get heatmap data: {str(e)}")
-
-# 获取trace数据
-@app.get("/api/trace_data")
-async def get_trace_data():
-    """获取trace数据"""
-    global global_optimizer_manager
-    if global_optimizer_manager is None:
-        raise HTTPException(status_code=400, detail="Optimizer not initialized")
-    
-    try:
-        optimizer = global_optimizer_manager.get_current_optimizer()
-        trace_data = optimizer.get_trace_data()
-        
-        # 构建符合前端期望的trace格式
-        frontend_trace = {
-            "iteration_history": trace_data["iteration_history"],
-            "hypervolume_history": trace_data["hypervolume_history"],
-            "experiment_data": trace_data["experiment_data"],
-            "pareto_front": trace_data["pareto_front"],
-            "current_iteration": len(trace_data["iteration_history"]),
-            "total_experiments": len(trace_data["experiment_data"]["X"]),
-            "objectives": trace_data["experiment_data"]["objectives"]
-        }
-        
-        return {
-            "success": True,
-            "trace_data": frontend_trace
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get trace data: {str(e)}")
-
 # 获取参数空间信息
 @app.get("/api/parameter_space")
 async def get_parameter_space():
@@ -442,10 +386,10 @@ async def get_parameter_space():
         optimizer = global_optimizer_manager.get_current_optimizer()
         return {
             "success": True,
-            "param_names": optimizer.active_param_names,
-            "bounds": optimizer.active_bounds.cpu().numpy().tolist(),
-            "steps": optimizer._get_active_steps().cpu().numpy().tolist(),
-            "pH_safety_constraints": optimizer.pH_safety_constraints
+            "param_names": optimizer.param_names,
+            "bounds": optimizer.param_bounds.cpu().numpy().tolist(),
+            "steps": optimizer.param_steps.cpu().numpy().tolist(),
+            "pH_safety_constraints": global_optimizer_manager.pH_safety_constraints
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get parameter space: {str(e)}")
@@ -481,9 +425,16 @@ async def reset_optimizer(seed: int = Query(42, description="Random seed for rep
     """重置优化器"""
     global global_optimizer_manager
     try:
+        output_dir = os.path.join(project_root, 'data', 'output')
+        fig_dir = os.path.join(project_root, 'data', 'figures')
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(fig_dir, exist_ok=True)
+        
         global_optimizer_manager = OptimizerManager(
-            output_dir=OUTPUT_DIR,
-            fig_dir=FIGURE_DIR,
+            output_dir=output_dir,
+            fig_dir=fig_dir,
             seed=seed
         )
         return {

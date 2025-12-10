@@ -17,11 +17,23 @@ node --version
 
 # 启动后端API服务
 echo ""
-echo "【INFO】Starting Backend API Server..."
+echo "【INFO】Starting Backend API Server (MetalBayes)..."
 echo "========================================"
-cd MyAiProj
-python api_server.py &
-API_PID=$!
+cd MetalBayes
+
+# 检查并激活 conda 环境
+if command -v conda &> /dev/null; then
+    echo "【INFO】Using conda environment: bayes"
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    # 使用 conda run 确保环境正确激活（适用于后台进程）
+    conda run -n bayes --no-capture-output python api_server.py &
+    API_PID=$!
+else
+    # 如果没有 conda，直接使用 python
+    echo "【WARNING】Conda not found, using system python"
+    python api_server.py &
+    API_PID=$!
+fi
 echo "Backend API Server started with PID: $API_PID"
 echo "API URL: http://localhost:8000"
 echo ""

@@ -28,6 +28,9 @@ export interface AlgorithmParams {
   nInit: number; // Number of initial samples
   batchSize: number; // Batch size per iteration
   seed: number; // Random seed
+  phase1OxideMaxIterations: number; // Phase 1氧化物阶段最大迭代次数
+  phase1OrganicMaxIterations: number; // Phase 1有机物阶段最大迭代次数
+  phase1ImprovementThreshold: number; // Phase 1改进率阈值
 }
 
 export interface IterationResult {

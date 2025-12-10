@@ -38,7 +38,7 @@ const MetricsChart: React.FC<Props> = ({ metricsHistory }) => {
             tick={{ fill: '#cbd5e1' }}
             tickLine={{ stroke: '#64748b' }}
             axisLine={{ stroke: '#64748b' }}
-            domain={[1, 'dataMax']}
+            domain={[0, 'dataMax']}
             allowDecimals={false}
             label={{ 
               value: 'Iteration', 
