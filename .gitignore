@@ -1,10 +1,17 @@
-# Generated experiment data files (CSV)
-MyAiProj/SemiConductor_3obj/data/output/tkg_experiment_*.csv
-**/data/output/tkg_experiment_*.csv
+# All CSV files (experiment data)
+*.csv
+# But keep any CSV files that might be needed (if any)
+# !important_data.csv
 
-# Generated optimization history files (JSON)
-MyAiProj/SemiConductor_3obj/data/output/tkg_optimization_history_*.json
-**/data/output/tkg_optimization_history_*.json
+# All JSON files (optimization history, test outputs, etc.)
+*.json
+# But keep configuration JSON files
+!package.json
+!package-lock.json
+!tsconfig.json
+!metadata.json
+# Keep any other config JSON files if needed
+# !config.json
 
 # Python cache
 __pycache__/
