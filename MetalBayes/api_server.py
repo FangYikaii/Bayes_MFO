@@ -106,6 +106,7 @@ class InitOptimizerRequest(BaseModel):
     seed: int = 42
     phase_1_oxide_max_iterations: int = 5
     phase_1_organic_max_iterations: int = 5
+    device: Optional[str] = None  # 如果为 None，自动检测 CUDA；可以指定 'cuda' 或 'cpu'
 
 # 初始化优化器
 @app.post("/api/init")
@@ -127,6 +128,7 @@ async def init_optimizer(request: InitOptimizerRequest = InitOptimizerRequest())
             output_dir=output_dir,
             fig_dir=fig_dir,
             seed=request.seed,
+            device=request.device,  # 如果为 None，会自动检测 CUDA
             phase_1_oxide_max_iterations=request.phase_1_oxide_max_iterations,
             phase_1_organic_max_iterations=request.phase_1_organic_max_iterations
         )
@@ -135,12 +137,20 @@ async def init_optimizer(request: InitOptimizerRequest = InitOptimizerRequest())
         # 获取当前优化器以获取参数信息
         current_optimizer = global_optimizer_manager.get_current_optimizer()
         
+        # 获取设备信息
+        device_info = {
+            "device": str(global_optimizer_manager.device),
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        }
+        
         return {
             "success": True,
             "message": "Optimizer initialized successfully",
             "param_names": current_optimizer.param_names,
             "bounds": current_optimizer.param_bounds.cpu().numpy().tolist(),
-            "phase": global_optimizer_manager.current_phase
+            "phase": global_optimizer_manager.current_phase,
+            "device_info": device_info
         }
     except Exception as e:
         logger.error(f"初始化优化器失败: {str(e)}", exc_info=True)
