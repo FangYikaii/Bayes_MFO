@@ -6,6 +6,15 @@
 import pytest
 import os
 import sys
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 # conftest.py 会自动处理导入和 fixtures
 from conftest import TraceAwareKGOptimizer, OptimizerManager
@@ -36,9 +45,9 @@ def test_optimize_phase_1_oxide(optimizer_and_param_space, temp_dirs):
     assert os.path.exists(csv_file), f"CSV 文件应该存在: {csv_file}"
     assert os.path.exists(json_file), f"JSON 文件应该存在: {json_file}"
     
-    print(f"\n✓ Phase 1 Oxide 优化测试通过")
-    print(f"  - 总样本数: {optimizer.X.shape[0]}")
-    print(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
+    logger.info("✓ Phase 1 Oxide 优化测试通过")
+    logger.info(f"  - 总样本数: {optimizer.X.shape[0]}")
+    logger.info(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
 
 
 @pytest.mark.parametrize('phase', ['phase_1_oxide', 'phase_1_organic', 'phase_2'])
@@ -75,10 +84,10 @@ def test_optimize_all_phases(optimizer_manager, temp_dirs, seed, device, phase):
     assert len(optimizer.iteration_history) == n_iter + 1, \
         f"{phase}: 应该有 {n_iter + 1} 次迭代记录"
     
-    print(f"\n✓ {phase} 优化测试通过")
-    print(f"  - 参数数量: {expected_n_params}")
-    print(f"  - 总样本数: {optimizer.X.shape[0]}")
-    print(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
+    logger.info(f"✓ {phase} 优化测试通过")
+    logger.info(f"  - 参数数量: {expected_n_params}")
+    logger.info(f"  - 总样本数: {optimizer.X.shape[0]}")
+    logger.info(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
 
 
 def test_optimize_with_existing_data(optimizer_and_param_space, temp_dirs):
@@ -97,9 +106,9 @@ def test_optimize_with_existing_data(optimizer_and_param_space, temp_dirs):
     assert optimizer.X.shape[0] >= initial_samples + n_iter * optimizer.batch_size, \
         f"应该有更多样本，初始: {initial_samples}, 当前: {optimizer.X.shape[0]}"
     
-    print(f"\n✓ 使用现有数据的优化测试通过")
-    print(f"  - 初始样本数: {initial_samples}")
-    print(f"  - 最终样本数: {optimizer.X.shape[0]}")
+    logger.info("✓ 使用现有数据的优化测试通过")
+    logger.info(f"  - 初始样本数: {initial_samples}")
+    logger.info(f"  - 最终样本数: {optimizer.X.shape[0]}")
 
 
 def test_optimize_hypervolume_increase(optimizer_and_param_space, temp_dirs):
@@ -118,11 +127,11 @@ def test_optimize_hypervolume_increase(optimizer_and_param_space, temp_dirs):
         assert hv >= 0, f"迭代 {i}: 超体积应该 >= 0，实际为 {hv}"
         assert not (hv != hv), f"迭代 {i}: 超体积不应该是 NaN"
     
-    # 打印超体积趋势
-    print(f"\n✓ 超体积趋势测试通过")
-    print(f"  - 初始超体积: {optimizer.hypervolume_history[0]:.6f}")
-    print(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
-    print(f"  - 超体积变化: {optimizer.hypervolume_history[-1] - optimizer.hypervolume_history[0]:.6f}")
+    # 记录超体积趋势
+    logger.info("✓ 超体积趋势测试通过")
+    logger.info(f"  - 初始超体积: {optimizer.hypervolume_history[0]:.6f}")
+    logger.info(f"  - 最终超体积: {optimizer.hypervolume_history[-1]:.6f}")
+    logger.info(f"  - 超体积变化: {optimizer.hypervolume_history[-1] - optimizer.hypervolume_history[0]:.6f}")
 
 
 if __name__ == "__main__":

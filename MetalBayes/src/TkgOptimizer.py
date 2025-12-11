@@ -1,9 +1,12 @@
+import warnings
+warnings.filterwarnings('ignore')
 import json
 from datetime import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import torch
+import logging
 from botorch.models.gp_regression import SingleTaskGP
 from botorch.models.model_list_gp_regression import ModelListGP
 from botorch import fit_gpytorch_mll
@@ -15,6 +18,9 @@ from botorch.utils.transforms import unnormalize, normalize
 from botorch.utils.sampling import draw_sobol_samples
 from botorch.optim.optimize import optimize_acqf
 from gpytorch.mlls.sum_marginal_log_likelihood import SumMarginalLogLikelihood
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class TraceAwareKGOptimizer:
@@ -28,9 +34,9 @@ class TraceAwareKGOptimizer:
         if device is None:
             self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             if torch.cuda.is_available():
-                print(f"【INFO】CUDA is available, using GPU: {torch.cuda.get_device_name(0)}")
+                logger.info(f"CUDA is available, using GPU: {torch.cuda.get_device_name(0)}")
             else:
-                print("【INFO】CUDA is not available, using CPU")
+                logger.info("CUDA is not available, using CPU")
         else:
             # device 可能是字符串或 torch.device 对象
             if isinstance(device, torch.device):
@@ -40,9 +46,9 @@ class TraceAwareKGOptimizer:
             
             # 检查是否是 CUDA 设备
             if self.device.type == 'cuda':
-                print(f"【INFO】Using specified GPU device: {self.device}")
+                logger.info(f"Using specified GPU device: {self.device}")
             else:
-                print(f"【INFO】Using specified device: {self.device}")
+                logger.info(f"Using specified device: {self.device}")
         
         # 使用传入的参数空间配置，如果没有则自己定义（向后兼容）
         if param_space is not None:
@@ -103,13 +109,13 @@ class TraceAwareKGOptimizer:
         self.seed = seed
         self._set_seed(seed)
         
-        print(f"【INFO】Initialized TraceAwareKGOptimizer with device: {self.device}")
-        print(f"【INFO】Parameter space: {self.param_names}")
-        # Print bounds on CPU to avoid CUDA kernel errors during formatting
+        logger.info(f"Initialized TraceAwareKGOptimizer with device: {self.device}")
+        logger.info(f"Parameter space: {self.param_names}")
+        # Log bounds on CPU to avoid CUDA kernel errors during formatting
         if hasattr(self, 'param_bounds'):
-            print(f"【INFO】Bounds: {self.param_bounds.cpu()}")
+            logger.info(f"Bounds: {self.param_bounds.cpu()}")
         else:
-            print(f"【INFO】Bounds: Not loaded yet")
+            logger.info("Bounds: Not loaded yet")
     
     @staticmethod
     def _set_seed(seed):
@@ -149,7 +155,7 @@ class TraceAwareKGOptimizer:
             # Check if any sample in the batch has a very high value for this objective
             for batch_idx in range(y.shape[0]):
                 if y[batch_idx, i] > 0.9:
-                    print(f"【INFO】Detected saturated {obj_name} value: {y[batch_idx, i]:.4f}, adding exploration encouragement")
+                    logger.info(f"Detected saturated {obj_name} value: {y[batch_idx, i]:.4f}, adding exploration encouragement")
                     
                     # Add a small amount of noise to prevent perfect values from dominating
                     noise = torch.randn(1, device=y.device) * 0.05
@@ -223,7 +229,7 @@ class TraceAwareKGOptimizer:
         
         # 更新迭代计数
         self.current_iteration += 1
-        print(f"\n【INFO】Iteration {self.current_iteration}, Phase {self.phase}, Subphase: {self.phase_1_subphase if self.phase == 1 else 'N/A'}")
+        logger.info(f"Iteration {self.current_iteration}, Phase {self.phase}, Subphase: {self.phase_1_subphase if self.phase == 1 else 'N/A'}")
         
         try:
             # Initialize model
@@ -260,7 +266,7 @@ class TraceAwareKGOptimizer:
                     avg_min_distance = min_distances.mean().item()
                     
                     if avg_min_distance < 0.1:
-                        print(f"【INFO】Candidates are too similar, adding exploration noise")
+                        logger.info("Candidates are too similar, adding exploration noise")
                         exploration_noise = torch.randn_like(candidates) * 0.05
                         candidates += exploration_noise
                         # 确保噪声后仍在 [0, 1] 范围内
@@ -282,13 +288,11 @@ class TraceAwareKGOptimizer:
                 candidates = self._apply_oxide_constraints(candidates)
             
             # Evaluate candidates
-            print(f"【DEBUG】Iteration {self.current_iteration}: Running experiments...")
+            logger.debug(f"Iteration {self.current_iteration}: Running experiments...")
             return self._evaluate_and_update(candidates, simulation_flag, iteration=self.current_iteration, acquisition_values=acq_values)
             
         except Exception as e:
-            print(f"【ERROR】Error in iteration {self.current_iteration}: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error in iteration {self.current_iteration}: {type(e).__name__}: {e}", exc_info=True)
             raise
     
     def optimize(self, n_iter=5, simulation_flag=True):
@@ -309,41 +313,41 @@ class TraceAwareKGOptimizer:
         if self.X.shape[0] == 0:
             self.current_iteration = 0
         
-        print("=== Initialize experiments ===")
+        logger.info("=== Initialize experiments ===")
         # 如果还没有初始数据，第一次调用 run_single_step 会生成初始样本
         if self.X.shape[0] == 0:
             init_result = self.run_single_step(simulation_flag=simulation_flag)
             assert init_result['iteration'] == 0, f"Initial iteration should be 0, got {init_result['iteration']}"
-            print(f"Initial samples generated: {init_result['candidates'].shape[0]} samples")
-            print(f"Initial hypervolume: {init_result['hypervolume']:.6f}")
+            logger.info(f"Initial samples generated: {init_result['candidates'].shape[0]} samples")
+            logger.info(f"Initial hypervolume: {init_result['hypervolume']:.6f}")
         else:
-            print(f"Using existing data: {self.X.shape[0]} samples")
-            print(f"Current hypervolume: {self._compute_hypervolume():.6f}")
+            logger.info(f"Using existing data: {self.X.shape[0]} samples")
+            logger.info(f"Current hypervolume: {self._compute_hypervolume():.6f}")
         
-        print("\n=== Optimization phase ===")
+        logger.info("=== Optimization phase ===")
         # 运行优化迭代
         for i in range(1, n_iter + 1):
-            print(f"\n【INFO】Iteration {i}/{n_iter}")
+            logger.info(f"Iteration {i}/{n_iter}")
             
             # 运行单次迭代（使用自己的逻辑）
             result = self.run_single_step(simulation_flag=simulation_flag)
             
-            # 打印当前超体积
+            # 记录当前超体积
             hv = result['hypervolume']
-            print(f"Current hypervolume: {hv:.6f}")
-            print(f"Candidates generated: {result['candidates'].shape[0]} samples")
+            logger.info(f"Current hypervolume: {hv:.6f}")
+            logger.info(f"Candidates generated: {result['candidates'].shape[0]} samples")
         
-        print(f"\n=== Optimization completed ===")
-        print(f"Total iterations: {n_iter}")
-        print(f"Total samples: {self.X.shape[0]}")
-        print(f"Final hypervolume: {self._compute_hypervolume():.6f}")
+        logger.info("=== Optimization completed ===")
+        logger.info(f"Total iterations: {n_iter}")
+        logger.info(f"Total samples: {self.X.shape[0]}")
+        logger.info(f"Final hypervolume: {self._compute_hypervolume():.6f}")
         
-        # 打印帕累托前沿信息
+        # 记录帕累托前沿信息
         pareto_x, pareto_y = self.get_pareto_front()
         if pareto_x.shape[0] > 0:
-            print(f"Pareto front size: {pareto_x.shape[0]} solutions")
+            logger.info(f"Pareto front size: {pareto_x.shape[0]} solutions")
         else:
-            print("No Pareto front solutions found")
+            logger.info("No Pareto front solutions found")
     
     def simulate_experiment(self, candidates):
         """
@@ -418,8 +422,7 @@ class TraceAwareKGOptimizer:
         
         result = torch.cat([obj1, obj2, obj3], dim=-1).to(self.device)
         return result
-
-    #TODO: 需要修改为从数据库中获取真实数据    
+  
     def get_human_input(self, candidates):
         """
         模拟实验，返回目标值
@@ -622,7 +625,7 @@ class TraceAwareKGOptimizer:
             if self.Y[:, i].max() > 0.9:
                 # Increase the reference point for saturated objectives to focus on other objectives
                 dynamic_ref[i] = 0.5
-                print(f"【INFO】Objective {obj_name} is approaching saturation, adjusting reference point to {dynamic_ref[i]:.2f}")
+                logger.info(f"Objective {obj_name} is approaching saturation, adjusting reference point to {dynamic_ref[i]:.2f}")
         
         # Create partitioning for hypervolume calculation with dynamic reference point
         partitioning = NondominatedPartitioning(ref_point=dynamic_ref, Y=current_pred)
@@ -708,20 +711,21 @@ class TraceAwareKGOptimizer:
         """Apply oxide constraints to the samples
         
         氧化物约束逻辑
-        约束：metal_a_type 和 metal_b_type 的数值不能相同
+        约束1：metal_a_type 和 metal_b_type 的数值不能相同
+        约束2：只有当 metal_b_type == 0 时，metal_molar_ratio_b_a 才能为 0
+              如果 metal_b_type != 0，则 metal_molar_ratio_b_a 必须 >= 1
         
-        # TODO: 这里的参数空间设置的还是有问题: 如果 B 不存在的话，这个摩尔比有问题
-        # 不管的话 需要探索很久 会出现问题
         约束信息从 OptimizerManager 初始化时传入
         """
         # 如果没有约束信息，直接返回
         if self.constraints is None or 'oxide_constraints' not in self.constraints:
             return samples
         
-        # 找到 metal_a_type 和 metal_b_type 在参数空间中的索引
+        # 找到相关参数在参数空间中的索引
         try:
             metal_a_type_idx = self.param_names.index('metal_a_type')
             metal_b_type_idx = self.param_names.index('metal_b_type')
+            molar_ratio_idx = self.param_names.index('metal_molar_ratio_b_a')
         except ValueError:
             # 如果当前阶段不包含这些参数，直接返回
             return samples
@@ -731,19 +735,21 @@ class TraceAwareKGOptimizer:
                               self.param_bounds[1, metal_a_type_idx].item())
         metal_b_type_bounds = (self.param_bounds[0, metal_b_type_idx].item(), 
                               self.param_bounds[1, metal_b_type_idx].item())
+        molar_ratio_bounds = (self.param_bounds[0, molar_ratio_idx].item(), 
+                             self.param_bounds[1, molar_ratio_idx].item())
         metal_a_type_step = self.param_steps[metal_a_type_idx].item()
         metal_b_type_step = self.param_steps[metal_b_type_idx].item()
+        molar_ratio_step = self.param_steps[molar_ratio_idx].item()
         
         # 对每个样本应用约束
         for i in range(samples.shape[0]):
-            # 获取当前样本的 metal_a_type 和 metal_b_type 值（四舍五入到最近的整数）
+            # 获取当前样本的参数值（四舍五入到最近的整数）
             metal_a_type = int(torch.round(samples[i, metal_a_type_idx]).item())
             metal_b_type = int(torch.round(samples[i, metal_b_type_idx]).item())
             
-            # 检查是否相同（metal_b_type 为 0 时表示没有 metal B，这是允许的）
+            # 约束1：metal_a_type 和 metal_b_type 不能相同
             if metal_b_type != 0 and metal_a_type == metal_b_type:
                 # 如果相同，需要修改 metal_b_type 为一个不同的值
-                # 计算可用的值范围（排除 metal_a_type）
                 min_val = int(metal_b_type_bounds[0])
                 max_val = int(metal_b_type_bounds[1])
                 
@@ -756,9 +762,38 @@ class TraceAwareKGOptimizer:
                     new_metal_b_type = torch.randint(0, len(available_values), (1,), device=samples.device).item()
                     new_metal_b_type = available_values[new_metal_b_type]
                     samples[i, metal_b_type_idx] = float(new_metal_b_type)
+                    metal_b_type = new_metal_b_type
                 else:
                     # 如果没有可用值，设置为 0（表示没有 metal B）
                     samples[i, metal_b_type_idx] = 0.0
+                    metal_b_type = 0
+            
+            # 约束2：只有当 metal_b_type == 0 时，molar_ratio 才能为 0
+            # 如果 metal_b_type != 0，则 molar_ratio 必须 >= 1
+            # 先对 molar_ratio 进行离散化（使用 Tensor 操作）
+            samples[i, molar_ratio_idx] = torch.round(samples[i, molar_ratio_idx] / molar_ratio_step) * molar_ratio_step
+            molar_ratio_int = int(samples[i, molar_ratio_idx].item())
+            
+            if metal_b_type == 0:
+                # metal_b_type == 0 时，molar_ratio 可以为 0
+                # 但如果 molar_ratio != 0，需要修正为 0（因为 metal_b_type == 0 表示没有 metal B）
+                if molar_ratio_int != 0:
+                    samples[i, molar_ratio_idx] = 0.0
+            else:
+                # metal_b_type != 0 时，molar_ratio 必须 >= 1
+                if molar_ratio_int == 0:
+                    # 如果为 0，随机选择 1 到最大值之间的值
+                    min_ratio = max(1, int(molar_ratio_bounds[0]))
+                    max_ratio = int(molar_ratio_bounds[1])
+                    num_steps = int((max_ratio - min_ratio) / molar_ratio_step) + 1
+                    step_idx = torch.randint(0, num_steps, (1,), device=samples.device).item()
+                    new_ratio = min_ratio + step_idx * molar_ratio_step
+                    new_ratio = min(new_ratio, max_ratio)
+                    samples[i, molar_ratio_idx] = float(new_ratio)
+                else:
+                    # 确保值在边界内并符合离散化要求
+                    samples[i, molar_ratio_idx] = torch.clamp(samples[i, molar_ratio_idx], 
+                                                             molar_ratio_bounds[0], molar_ratio_bounds[1])
             
             # 确保值在边界内并符合离散化要求
             samples[i, metal_a_type_idx] = torch.round(samples[i, metal_a_type_idx] / metal_a_type_step) * metal_a_type_step
@@ -775,7 +810,8 @@ class TraceAwareKGOptimizer:
         """Apply organic safety constraints to the samples
         
         针对有机物的安全约束逻辑
-        根据 organic_formula 的值，限制对应的 organic_ph 范围
+        1. 确保 organic_formula 在边界内 [1, 30]
+        2. 根据 organic_formula 的值，限制对应的 organic_ph 范围
         约束信息从 OptimizerManager 初始化时传入
         """
         # 如果没有约束信息，直接返回
@@ -792,13 +828,33 @@ class TraceAwareKGOptimizer:
             # 如果当前阶段不包含这些参数，直接返回
             return samples
         
-        # 获取 pH 的步长（用于离散化）
+        # 获取参数边界和步长
+        formula_bounds = (self.param_bounds[0, formula_idx].item(), 
+                         self.param_bounds[1, formula_idx].item())
+        formula_step = self.param_steps[formula_idx].item()
         ph_step = self.param_steps[ph_idx].item()
         
         # 对每个样本应用约束
         for i in range(samples.shape[0]):
+            # 首先确保 organic_formula 在边界内并符合离散化要求
+            samples[i, formula_idx] = torch.round(samples[i, formula_idx] / formula_step) * formula_step
+            samples[i, formula_idx] = torch.clamp(samples[i, formula_idx], 
+                                                  formula_bounds[0], formula_bounds[1])
+            
             # 获取当前样本的 organic_formula 值（四舍五入到最近的整数）
             formula_id = int(torch.round(samples[i, formula_idx]).item())
+            
+            # 确保 formula_id 在有效范围内 [1, 30]
+            if formula_id < 1 or formula_id > 30:
+                # 如果超出范围，随机选择一个有效值
+                min_formula = max(1, int(formula_bounds[0]))
+                max_formula = int(formula_bounds[1])
+                num_steps = int((max_formula - min_formula) / formula_step) + 1
+                step_idx = torch.randint(0, num_steps, (1,), device=samples.device).item()
+                new_formula = min_formula + step_idx * formula_step
+                new_formula = min(new_formula, max_formula)
+                samples[i, formula_idx] = float(new_formula)
+                formula_id = int(new_formula)
             
             # 检查 formula_id 是否在约束字典中
             if formula_id in pH_safety_constraints:

@@ -1,6 +1,14 @@
 from typing import Optional, Dict, Any
+import warnings
+warnings.filterwarnings('ignore')
 import torch
+import os
+import logging
 from .TkgOptimizer import TraceAwareKGOptimizer
+from .DataVisualizer import DataVisualizer
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 class OptimizerManager:
      # 阶段定义
@@ -50,6 +58,13 @@ class OptimizerManager:
             self.PHASE_1_ORGANIC: [],
             self.PHASE_2: []
         }
+        
+        # 记录已生成可视化的阶段（避免重复生成）
+        self.visualizations_generated: Dict[str, bool] = {
+            self.PHASE_1_OXIDE: False,
+            self.PHASE_1_ORGANIC: False,
+            self.PHASE_2: False
+        }
 
         # 定义参数空间（由 Manager 统一管理）
         self._define_parameter_spaces()
@@ -94,7 +109,7 @@ class OptimizerManager:
             'metal_a_type': (1, 20, 1),      # 1-20, step 1
             'metal_a_concentration': (10, 50, 10),  # 10-50%, step 10
             'metal_b_type': (0, 20, 1),      # 0-20, step 1 (0 means no metal B)
-            'metal_molar_ratio_b_a': (1, 10, 1)    # 1-10%, step 1
+            'metal_molar_ratio_b_a': (0, 10, 1)    # 0-10, step 1 (0 only when metal_b_type == 0)
         }
         
         # Combine all parameters (no longer need experiment_condition as phases are managed separately)
@@ -240,10 +255,7 @@ class OptimizerManager:
             
             return result
         except Exception as e:
-            print(f"【ERROR】Error in _get_phase_parameter_space for phase {phase}: {str(e)}")
-            print(f"【DEBUG】Device: {self.device}")
-            print(f"【DEBUG】Bounds shape: {self.bounds.shape if hasattr(self, 'bounds') else 'N/A'}")
-            print(f"【DEBUG】Steps shape: {self.steps.shape if hasattr(self, 'steps') else 'N/A'}")
+            logger.error(f"获取阶段 {phase} 的参数空间失败: {str(e)}")
             raise
 
     def get_current_optimizer(self) -> TraceAwareKGOptimizer:
@@ -268,11 +280,9 @@ class OptimizerManager:
         # 检查是否达到最大迭代次数
         if self.current_phase == self.PHASE_1_OXIDE:
             if current_iter >= self.phase_1_oxide_max_iterations:
-                print(f"【INFO】Phase 1 Oxide 达到最大迭代次数 ({current_iter}/{self.phase_1_oxide_max_iterations})，准备切换阶段")
                 return True
         elif self.current_phase == self.PHASE_1_ORGANIC:
             if current_iter >= self.phase_1_organic_max_iterations:
-                print(f"【INFO】Phase 1 Organic 达到最大迭代次数 ({current_iter}/{self.phase_1_organic_max_iterations})，准备切换阶段")
                 return True
         
         return False
@@ -358,7 +368,7 @@ class OptimizerManager:
                 result_list.append(combined)
             result = torch.stack(result_list[:n_init]).to(self.device)
         
-        # 应用约束
+        # 应用约束和离散化
         # 获取 Phase 2 的参数空间配置
         param_space = self._get_phase_parameter_space(self.PHASE_2)
         
@@ -372,8 +382,16 @@ class OptimizerManager:
             phase=self.PHASE_2,
             param_space=param_space
         )
+        
+        # 先应用离散化约束，确保所有参数都在边界内并符合步长要求
+        result = temp_optimizer._apply_discretization_constraints(result, param_space['steps'], param_space['bounds'])
+        
+        # 然后应用阶段特定的约束
         result = temp_optimizer._apply_organic_safety_constraints(result)
         result = temp_optimizer._apply_oxide_constraints(result)
+        
+        # 再次应用离散化约束，确保约束修正后的值仍然在边界内
+        result = temp_optimizer._apply_discretization_constraints(result, param_space['steps'], param_space['bounds'])
         
         return result
     
@@ -381,21 +399,16 @@ class OptimizerManager:
         """切换到下一个阶段"""
         if self.current_phase == self.PHASE_1_OXIDE:
             self.current_phase = self.PHASE_1_ORGANIC
-            print(f"【INFO】切换到 Phase 1 Organic")
             # 确保下一个阶段的优化器已初始化
             self._initialize_optimizer(self.current_phase)
         elif self.current_phase == self.PHASE_1_ORGANIC:
             self.current_phase = self.PHASE_2
-            print(f"【INFO】切换到 Phase 2")
             
             # 获取前两个阶段的最优参数
             oxide_best = self._get_best_parameters_from_phase(self.PHASE_1_OXIDE, n_best=5)
             organic_best = self._get_best_parameters_from_phase(self.PHASE_1_ORGANIC, n_best=5)
             
             if oxide_best is not None and organic_best is not None:
-                print(f"【INFO】从 Phase 1 Oxide 获取 {oxide_best.shape[0]} 个最优参数")
-                print(f"【INFO】从 Phase 1 Organic 获取 {organic_best.shape[0]} 个最优参数")
-                
                 # 初始化优化器
                 self._initialize_optimizer(self.PHASE_2)
                 optimizer = self.optimizers[self.PHASE_2]
@@ -407,17 +420,14 @@ class OptimizerManager:
                 initial_samples = self._combine_phase_parameters(oxide_best, organic_best, n_init)
                 
                 if initial_samples is not None:
-                    print(f"【INFO】为 Phase 2 生成了 {initial_samples.shape[0]} 个组合初始样本")
                     # 评估初始样本并更新数据（包括保存实验数据）
                     optimizer._evaluate_and_update(initial_samples, simulation_flag=True, iteration=0, acquisition_values=None)
-                    print(f"【INFO】Phase 2 初始样本已评估并保存，共 {optimizer.Y.shape[0]} 个样本")
                 else:
-                    print(f"【WARNING】无法生成组合初始样本，使用默认初始样本生成")
+                    logger.warning("无法生成组合初始样本，使用默认初始样本生成")
+                    self._initialize_optimizer(self.PHASE_2)
             else:
-                print(f"【WARNING】无法获取前两个阶段的最优参数，使用默认初始样本生成")
+                logger.warning("无法获取前两个阶段的最优参数，使用默认初始样本生成")
                 self._initialize_optimizer(self.PHASE_2)
-        elif self.current_phase == self.PHASE_2:
-            print(f"【INFO】Phase 2 是最终阶段，不切换")
         else:
             raise ValueError(f"未知的阶段: {self.current_phase}")
     
@@ -462,14 +472,39 @@ class OptimizerManager:
             'optimizer': optimizer
         }
         
+        # 记录当前阶段（在切换前）
+        current_phase_before_switch = self.current_phase
+        
         # 如果需要切换阶段，执行切换
         if should_switch:
             old_phase = self.current_phase
-            print(f"【DEBUG】准备切换阶段: {old_phase} -> ?")
+            
+            # 在切换阶段前，为旧阶段生成可视化图表（强制生成，确保使用最新数据）
+            try:
+                self.generate_visualizations_for_phase(old_phase, force=True)
+                self.visualizations_generated[old_phase] = True
+            except Exception as e:
+                logger.error(f"生成阶段 {old_phase} 的可视化时出错: {str(e)}", exc_info=True)
+            
             self._switch_to_next_phase()
             result['new_phase'] = self.current_phase
             result['old_phase'] = old_phase
-            print(f"【DEBUG】阶段切换完成: {old_phase} -> {self.current_phase}")
+            logger.info(f"阶段切换: {old_phase} -> {self.current_phase}")
+        
+        # 每次迭代后，为当前阶段更新可视化图表（每个阶段每次迭代都更新，包括初始样本生成）
+        current_optimizer = self.get_current_optimizer()
+        
+        if current_optimizer.X.shape[0] > 0:
+            # 所有阶段每次迭代后都更新可视化图表（包括初始样本生成后）
+            try:
+                if is_initial_samples:
+                    logger.info(f"阶段 {self.current_phase} 初始样本生成后，生成可视化图表")
+                else:
+                    logger.info(f"阶段 {self.current_phase} 迭代 {self.phase_iterations[self.current_phase]} 后，更新可视化图表")
+                
+                self.generate_visualizations_for_phase(self.current_phase, force=True)
+            except Exception as e:
+                logger.error(f"更新阶段 {self.current_phase} 的可视化图表时出错: {str(e)}", exc_info=True)
         
         return result
     
@@ -492,8 +527,64 @@ class OptimizerManager:
         """更新阶段的最大迭代次数（由前端动态设置）"""
         if phase_1_oxide_max_iterations is not None:
             self.phase_1_oxide_max_iterations = phase_1_oxide_max_iterations
-            print(f"【INFO】更新 Phase 1 Oxide 最大迭代次数: {phase_1_oxide_max_iterations}")
         if phase_1_organic_max_iterations is not None:
             self.phase_1_organic_max_iterations = phase_1_organic_max_iterations
-            print(f"【INFO】更新 Phase 1 Organic 最大迭代次数: {phase_1_organic_max_iterations}")
+    
+    def generate_visualizations_for_phase(self, phase: str, force: bool = False):
+        """
+        为指定阶段生成所有可视化图表
+        
+        Args:
+            phase: 阶段名称
+            force: 是否强制生成（即使已经生成过）
+        """
+        try:
+            # 检查是否已经生成过（除非强制生成）
+            if not force and self.visualizations_generated.get(phase, False):
+                return
+            
+            if phase not in self.optimizers:
+                logger.warning(f"阶段 {phase} 的优化器不存在，跳过可视化生成")
+                return
+            
+            optimizer = self.optimizers[phase]
+            if optimizer.X.shape[0] == 0:
+                logger.warning(f"阶段 {phase} 没有数据，跳过可视化生成")
+                return
+            
+            # 确保目录存在
+            if not os.path.exists(self.fig_dir):
+                os.makedirs(self.fig_dir, exist_ok=True)
+            
+            # 创建可视化器
+            visualizer = DataVisualizer(
+                output_dir=self.output_dir,
+                fig_dir=self.fig_dir
+            )
+            
+            # 从优化器读取数据
+            visualizer.read_data_from_optimizer(optimizer, phase)
+            
+            # 生成所有可视化图表
+            visualizer.generate_all_visualizations(phase)
+            
+            # 标记为已生成
+            self.visualizations_generated[phase] = True
+            
+            # 获取阶段对应的图表目录并验证
+            phase_dir_map = {
+                'phase_1_oxide': 'phase_1_oxide',
+                'phase_1_organic': 'phase_1_organic',
+                'phase_2': 'phase_2'
+            }
+            phase_dir = phase_dir_map.get(phase, phase)
+            phase_fig_path = os.path.join(self.fig_dir, phase_dir)
+            
+            if os.path.exists(phase_fig_path):
+                files = os.listdir(phase_fig_path)
+                logger.info(f"阶段 {phase} 可视化图表已生成 ({len(files)} 个文件) -> {phase_fig_path}")
+            
+        except Exception as e:
+            logger.error(f"生成阶段 {phase} 的可视化图表失败: {str(e)}", exc_info=True)
+            # 不要抛出异常，避免影响主流程
 

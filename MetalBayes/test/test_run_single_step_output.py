@@ -11,6 +11,15 @@ import pytest
 import torch
 import numpy as np
 from datetime import datetime
+import logging
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 from conftest import TraceAwareKGOptimizer, OptimizerManager
 
@@ -167,10 +176,10 @@ def test_run_single_step_output_structure(optimizer_and_param_space, temp_dirs):
     # 验证候选样本数量
     assert result1['candidates'].shape[0] == optimizer.n_init, "第一次迭代应该返回 n_init 个样本"
     assert result2['candidates'].shape[0] == optimizer.batch_size, "后续迭代应该返回 batch_size 个样本"
-    
-    print(f"\n✓ 结果已保存到文件:")
-    print(f"  文本: {output_file}")
-    print(f"  JSON: {json_file}")
+
+    logger.info("✓ 结果已保存到文件:")
+    logger.info(f"  文本: {output_file}")
+    logger.info(f"  JSON: {json_file}")
 
 
 def test_multiple_iterations_output(optimizer_and_param_space, temp_dirs):
@@ -255,10 +264,10 @@ def test_multiple_iterations_output(optimizer_and_param_space, temp_dirs):
     for i in range(1, len(results)):
         assert results[i]['hypervolume'] >= results[i-1]['hypervolume'] - 1e-6, \
             f"超体积不应该减少: {results[i-1]['hypervolume']} -> {results[i]['hypervolume']}"
-    
-    print(f"\n✓ 结果已保存到文件:")
-    print(f"  文本: {output_file}")
-    print(f"  JSON: {json_file}")
+
+    logger.info("✓ 结果已保存到文件:")
+    logger.info(f"  文本: {output_file}")
+    logger.info(f"  JSON: {json_file}")
 
 
 @pytest.mark.parametrize('phase', ['phase_1_oxide', 'phase_1_organic', 'phase_2'])
@@ -400,10 +409,10 @@ def test_all_phases_output(optimizer_manager, temp_dirs, seed, device, phase):
     for i in range(1, len(hypervolumes)):
         assert hypervolumes[i] >= hypervolumes[i-1] - 1e-6, \
             f"超体积不应该减少: {hypervolumes[i-1]} -> {hypervolumes[i]}"
-    
-    print(f"\n✓ [{phase}] {n_iterations}轮迭代结果已保存到文件:")
-    print(f"  文本: {output_file}")
-    print(f"  JSON: {json_file}")
+
+    logger.info(f"✓ [{phase}] {n_iterations}轮迭代结果已保存到文件:")
+    logger.info(f"  文本: {output_file}")
+    logger.info(f"  JSON: {json_file}")
 
 
 if __name__ == '__main__':

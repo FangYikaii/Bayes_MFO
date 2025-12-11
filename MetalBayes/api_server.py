@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings('ignore')
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,9 +7,74 @@ import uvicorn
 import os
 import sys
 from datetime import datetime
+from typing import Optional
 import pandas as pd
 import numpy as np
 import torch
+import logging
+
+# 尝试使用 colorlog，如果不可用则使用标准 logging
+USE_COLORLOG = False
+try:
+    import colorlog  # type: ignore
+    USE_COLORLOG = True
+except ImportError:
+    pass
+
+def setup_logging():
+    """配置带颜色的日志系统"""
+    # 清除现有的处理器
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    if USE_COLORLOG:
+        # 使用 colorlog 配置彩色日志
+        handler = colorlog.StreamHandler(sys.stdout)
+        handler.setFormatter(colorlog.ColoredFormatter(
+            '%(log_color)s%(asctime)s - %(name)s - %(levelname)s%(reset)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red,bold',
+                'CRITICAL': 'red,bg_white,bold',
+            },
+            secondary_log_colors={},
+            style='%'
+        ))
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(handler)
+    else:
+        # 使用标准 logging，但添加简单的 ANSI 颜色（如果终端支持）
+        class ColoredFormatter(logging.Formatter):
+            """简单的彩色日志格式化器"""
+            COLORS = {
+                'DEBUG': '\033[36m',      # Cyan
+                'INFO': '\033[32m',       # Green
+                'WARNING': '\033[33m',    # Yellow
+                'ERROR': '\033[31m',      # Red
+                'CRITICAL': '\033[31;1m', # Bold Red
+            }
+            RESET = '\033[0m'
+            
+            def format(self, record):
+                log_color = self.COLORS.get(record.levelname, '')
+                record.levelname = f"{log_color}{record.levelname}{self.RESET}"
+                return super().format(record)
+        
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(ColoredFormatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(handler)
+
+# 配置日志
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # 添加项目路径以便导入模型
 project_root = os.path.abspath(os.path.dirname(__file__))
@@ -76,10 +143,7 @@ async def init_optimizer(request: InitOptimizerRequest = InitOptimizerRequest())
             "phase": global_optimizer_manager.current_phase
         }
     except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"【ERROR】Failed to initialize optimizer: {str(e)}")
-        print(f"【ERROR】Traceback: {error_trace}")
+        logger.error(f"初始化优化器失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to initialize optimizer: {str(e)}")
 
 # 定义请求体模型
@@ -111,7 +175,6 @@ def save_recommended_parameters(candidates, optimizer, phase_name, phase_iterati
         
         # 如果没有推荐的参数，跳过保存
         if candidates_np.shape[0] == 0:
-            print(f"【WARNING】阶段 {phase_name} 迭代 {phase_iteration} 没有推荐的参数可保存")
             return
         
         # 获取参数名称
@@ -148,16 +211,11 @@ def save_recommended_parameters(candidates, optimizer, phase_name, phase_iterati
         # 追加到 CSV 文件（如果文件已存在则追加，否则创建新文件）
         if os.path.exists(filepath):
             df.to_csv(filepath, mode='a', header=False, index=False, encoding='utf-8-sig')
-            print(f"【INFO】推荐的参数已追加到: {filepath} (阶段: {phase_name}, 迭代: {phase_iteration}, 候选数: {candidates_np.shape[0]})")
         else:
             df.to_csv(filepath, mode='w', header=True, index=False, encoding='utf-8-sig')
-            print(f"【INFO】推荐的参数已保存到: {filepath} (阶段: {phase_name}, 迭代: {phase_iteration}, 候选数: {candidates_np.shape[0]})")
             
     except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"【ERROR】保存推荐参数失败: {str(e)}")
-        print(f"【ERROR】Traceback: {error_trace}")
+        logger.error(f"保存推荐参数失败: {str(e)}", exc_info=True)
 
 # 运行单步优化迭代
 @app.post("/api/optimize/step")
@@ -301,10 +359,7 @@ async def optimize_step(request: OptimizeStepRequest):
         return response
         
     except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"【ERROR】Optimization step failed: {str(e)}")
-        print(f"【ERROR】Traceback: {error_trace}")
+        logger.error(f"优化迭代失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Optimization step failed: {str(e)}")
     finally:
         global_optimizer_running = False
