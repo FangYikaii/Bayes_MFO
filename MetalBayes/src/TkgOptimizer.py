@@ -531,7 +531,13 @@ class TraceAwareKGOptimizer:
         
         new_rows = []
         for i in range(x_cpu.shape[0]):
-            data = {name: val for name, val in zip(self.param_names, x_cpu[i])}
+            data = {}
+            for name, val in zip(self.param_names, x_cpu[i]):
+                # 对于 organic_concentration，只保留两位小数
+                if name == 'organic_concentration':
+                    data[name] = round(float(val), 2)
+                else:
+                    data[name] = val
             data.update({
                 "Uniformity": y_cpu[i, 0],
                 "Coverage": y_cpu[i, 1],

@@ -194,7 +194,11 @@ def save_recommended_parameters(candidates, optimizer, phase_name, phase_iterati
         data_dict = {}
         for i, param_name in enumerate(param_names):
             if i < candidates_np.shape[1]:
-                data_dict[param_name] = candidates_np[:, i]
+                param_values = candidates_np[:, i]
+                # 对于 organic_concentration，只保留两位小数
+                if param_name == 'organic_concentration':
+                    param_values = np.round(param_values, 2)
+                data_dict[param_name] = param_values
             else:
                 # 如果参数索引超出范围，填充 NaN
                 data_dict[param_name] = [np.nan] * candidates_np.shape[0]

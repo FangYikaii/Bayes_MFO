@@ -23,11 +23,19 @@ cd MetalBayes
 
 # 检查并激活 conda 环境
 if command -v conda &> /dev/null; then
-    echo "【INFO】Using conda environment: bayes"
+    echo "【INFO】Activating conda environment: bayes"
     source "$(conda info --base)/etc/profile.d/conda.sh"
-    # 使用 conda run 确保环境正确激活（适用于后台进程）
-    conda run -n bayes --no-capture-output python api_server.py &
-    API_PID=$!
+    conda activate bayes
+    if [ $? -eq 0 ]; then
+        echo "【INFO】Conda environment 'bayes' activated successfully"
+        python api_server.py &
+        API_PID=$!
+    else
+        echo "【ERROR】Failed to activate conda environment 'bayes'"
+        echo "【WARNING】Trying to use conda run instead..."
+        conda run -n bayes --no-capture-output python api_server.py &
+        API_PID=$!
+    fi
 else
     # 如果没有 conda，直接使用 python
     echo "【WARNING】Conda not found, using system python"
