@@ -7,6 +7,8 @@ import argparse
 import os
 import sys
 import importlib.util
+import pandas as pd
+import numpy as np
 from datetime import datetime
 
 # 添加 src 目录到路径
@@ -41,6 +43,50 @@ sys.modules['OptimizerManager'] = opt_mgr_module
 OptimizerManager = opt_mgr_module.OptimizerManager
 
 
+def save_phase_parameter_space(optimizer, phase_name, output_dir, iteration_count):
+    """
+    保存阶段退出时的参数空间到 CSV 文件
+    
+    Args:
+        optimizer: TraceAwareKGOptimizer 实例
+        phase_name: 阶段名称
+        output_dir: 输出目录
+        iteration_count: 该阶段的迭代次数
+    """
+    if optimizer.X.shape[0] == 0:
+        print(f"【WARNING】阶段 {phase_name} 没有数据可保存")
+        return
+    
+    # 将参数数据转换为 numpy 数组
+    X_cpu = optimizer.X.cpu().numpy()
+    Y_cpu = optimizer.Y.cpu().numpy()
+    
+    # 创建 DataFrame
+    data_dict = {}
+    for i, param_name in enumerate(optimizer.param_names):
+        data_dict[param_name] = X_cpu[:, i]
+    
+    # 添加目标值
+    data_dict['Uniformity'] = Y_cpu[:, 0]
+    data_dict['Coverage'] = Y_cpu[:, 1]
+    data_dict['Adhesion'] = Y_cpu[:, 2]
+    
+    # 添加迭代信息
+    data_dict['Phase'] = [phase_name] * X_cpu.shape[0]
+    data_dict['Iteration'] = list(range(X_cpu.shape[0]))
+    data_dict['Phase_Iteration_Count'] = [iteration_count] * X_cpu.shape[0]
+    data_dict['Timestamp'] = [datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * X_cpu.shape[0]
+    
+    df = pd.DataFrame(data_dict)
+    
+    # 保存到 CSV 文件
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(output_dir, f"phase_parameter_space_{phase_name}_{timestamp}.csv")
+    df.to_csv(filename, index=False, encoding='utf-8-sig')
+    print(f"【INFO】阶段 {phase_name} 的参数空间已保存到: {filename}")
+    print(f"【INFO】共保存 {X_cpu.shape[0]} 个样本，{len(optimizer.param_names)} 个参数")
+
+
 def main(n_iter, phase='phase_1_oxide', use_manager=False, test_phase_switching=False):
     """
     主函数：运行优化流程
@@ -60,91 +106,104 @@ def main(n_iter, phase='phase_1_oxide', use_manager=False, test_phase_switching=
     os.makedirs(fig_dir, exist_ok=True)
     
     if test_phase_switching:
-        # 测试阶段切换功能
+        # 分阶段执行：前20次氧化物，21-40有机物，41-50混合
         print("=" * 80)
-        print("=== Testing Phase Switching with OptimizerManager ===")
+        print("=== 分阶段优化执行 ===")
+        print("=" * 80)
+        print(f"总迭代次数: {n_iter}")
+        print(f"阶段分配:")
+        print(f"  - Phase 1 Oxide (氧化物): 迭代 1-20")
+        print(f"  - Phase 1 Organic (有机物): 迭代 21-40")
+        print(f"  - Phase 2 (混合): 迭代 41-{n_iter}")
         print("=" * 80)
         
-        # 创建 OptimizerManager，设置较小的最大迭代次数以便快速测试
+        # 创建 OptimizerManager
         manager = OptimizerManager(
             output_dir=output_dir,
             fig_dir=fig_dir,
             seed=42,
             device='cpu',
-            phase_1_oxide_max_iterations=2,  # 第一阶段最大迭代2次
-            phase_1_organic_max_iterations=2  # 第二阶段最大迭代2次
+            phase_1_oxide_max_iterations=20,  # 第一阶段最大迭代20次
+            phase_1_organic_max_iterations=20  # 第二阶段最大迭代20次
         )
         
-        print(f"\n初始阶段: {manager.current_phase}")
-        print(f"Phase 1 Oxide 最大迭代次数: {manager.phase_1_oxide_max_iterations}")
-        print(f"Phase 1 Organic 最大迭代次数: {manager.phase_1_organic_max_iterations}")
+        # 定义阶段迭代范围
+        phase_ranges = {
+            OptimizerManager.PHASE_1_OXIDE: (1, 20),
+            OptimizerManager.PHASE_1_ORGANIC: (21, 40),
+            OptimizerManager.PHASE_2: (41, n_iter)
+        }
         
-        # 运行迭代直到达到总迭代次数
         # 计算所有阶段的迭代次数总和
         def get_total_iterations():
             return sum(manager.phase_iterations.values())
         
-        print(f"目标总迭代次数: {n_iter}")
-        
-        while True:
-            # 计算当前总迭代次数
-            current_total_iterations = get_total_iterations()
+        # 执行各阶段优化
+        for phase_name, (start_iter, end_iter) in phase_ranges.items():
+            if start_iter > n_iter:
+                print(f"\n【INFO】跳过阶段 {phase_name}（起始迭代 {start_iter} > 总迭代次数 {n_iter}）")
+                continue
             
-            # 如果达到目标总迭代次数，停止
-            if current_total_iterations >= n_iter:
-                print(f"\n已达到目标总迭代次数 {n_iter}（当前: {current_total_iterations}），停止优化")
-                break
+            # 切换到目标阶段
+            if manager.current_phase != phase_name:
+                print(f"\n【INFO】切换到阶段: {phase_name}")
+                # 如果是从其他阶段切换，需要手动设置
+                if phase_name == OptimizerManager.PHASE_1_ORGANIC:
+                    # 从 Phase 1 Oxide 切换到 Phase 1 Organic
+                    manager.current_phase = OptimizerManager.PHASE_1_ORGANIC
+                    manager._initialize_optimizer(OptimizerManager.PHASE_1_ORGANIC)
+                elif phase_name == OptimizerManager.PHASE_2:
+                    # 切换到 Phase 2 需要特殊处理
+                    # 确保 Phase 1 Organic 已经初始化
+                    if OptimizerManager.PHASE_1_ORGANIC not in manager.optimizers:
+                        manager.current_phase = OptimizerManager.PHASE_1_ORGANIC
+                        manager._initialize_optimizer(OptimizerManager.PHASE_1_ORGANIC)
+                    # 然后切换到 Phase 2
+                    manager._switch_to_next_phase()  # 这会从 Phase 1 Organic 切换到 Phase 2
             
-            current_phase = manager.current_phase
-            phase_iter = manager.phase_iterations[current_phase]
+            # 计算该阶段需要执行的迭代次数
+            phase_iterations_needed = min(end_iter, n_iter) - start_iter + 1
+            current_phase_iterations = manager.phase_iterations[phase_name]
+            iterations_to_run = phase_iterations_needed - current_phase_iterations
             
             print(f"\n{'=' * 80}")
-            print(f"当前阶段: {current_phase}")
-            print(f"阶段迭代次数: {phase_iter}")
-            print(f"总迭代次数: {current_total_iterations}/{n_iter}")
+            print(f"阶段: {phase_name}")
+            print(f"迭代范围: {start_iter}-{min(end_iter, n_iter)}")
+            print(f"当前已执行: {current_phase_iterations} 次")
+            print(f"需要执行: {iterations_to_run} 次迭代")
             print(f"{'=' * 80}")
             
-            # 运行单次迭代
-            result = manager.run_single_iteration(simulation_flag=True)
-            
-            # 更新总迭代次数
-            new_total_iterations = get_total_iterations()
-            
-            # 显示迭代结果
-            optimizer = result['optimizer']
-            print(f"迭代 {result['iteration']} 完成")
-            print(f"当前样本数: {optimizer.X.shape[0]}")
-            print(f"超体积: {result['hypervolume']:.6f}")
-            print(f"总迭代次数: {new_total_iterations}/{n_iter}")
-            
-            # 检查阶段切换
-            if result.get('should_switch_phase', False):
-                old_phase = result.get('old_phase', current_phase)
-                new_phase = result.get('new_phase', manager.current_phase)
-                print(f"\n【阶段切换】{old_phase} -> {new_phase}")
+            # 执行该阶段的迭代
+            while manager.phase_iterations[phase_name] < phase_iterations_needed:
+                # 确保当前阶段正确
+                if manager.current_phase != phase_name:
+                    print(f"【WARNING】当前阶段 {manager.current_phase} 与目标阶段 {phase_name} 不一致，调整中...")
+                    manager.current_phase = phase_name
                 
-                # 如果是切换到 Phase 2，显示初始样本信息
-                if new_phase == OptimizerManager.PHASE_2:
-                    new_optimizer = manager.get_current_optimizer()
-                    print(f"Phase 2 初始样本数: {new_optimizer.X.shape[0]}")
-                    print(f"Phase 2 初始样本参数形状: {new_optimizer.X.shape}")
-                    print(f"Phase 2 初始目标值形状: {new_optimizer.Y.shape}")
-                    
-                    # 显示前几个初始样本的参数
-                    if new_optimizer.X.shape[0] > 0:
-                        print(f"\nPhase 2 前3个初始样本参数:")
-                        for i in range(min(3, new_optimizer.X.shape[0])):
-                            print(f"  样本 {i+1}: {new_optimizer.X[i].cpu().numpy()}")
-                        print(f"\nPhase 2 前3个初始样本目标值:")
-                        for i in range(min(3, new_optimizer.Y.shape[0])):
-                            print(f"  样本 {i+1}: Uniformity={new_optimizer.Y[i, 0]:.4f}, "
-                                  f"Coverage={new_optimizer.Y[i, 1]:.4f}, "
-                                  f"Adhesion={new_optimizer.Y[i, 2]:.4f}")
+                current_phase_iter = manager.phase_iterations[phase_name]
+                global_iter = get_total_iterations() + 1
                 
-                # 阶段切换后，检查是否达到总迭代次数
-                if get_total_iterations() >= n_iter:
-                    print(f"\n阶段切换后已达到目标总迭代次数 {n_iter}，停止优化")
+                print(f"\n【迭代 {global_iter}/{n_iter}】阶段 {phase_name} 第 {current_phase_iter + 1} 次迭代")
+                
+                # 运行单次迭代
+                result = manager.run_single_iteration(simulation_flag=True)
+                
+                # 显示迭代结果
+                optimizer = result['optimizer']
+                print(f"  样本数: {optimizer.X.shape[0]}")
+                print(f"  超体积: {result['hypervolume']:.6f}")
+                
+                # 检查是否达到该阶段的迭代次数上限
+                if manager.phase_iterations[phase_name] >= phase_iterations_needed:
+                    print(f"\n【INFO】阶段 {phase_name} 已完成 {phase_iterations_needed} 次迭代")
                     break
+            
+            # 阶段结束时立即保存参数空间（使用当前阶段的优化器）
+            if phase_name in manager.optimizers:
+                phase_optimizer = manager.optimizers[phase_name]
+                phase_iter_count = manager.phase_iterations[phase_name]
+                print(f"\n【INFO】阶段 {phase_name} 结束，保存参数空间...")
+                save_phase_parameter_space(phase_optimizer, phase_name, output_dir, phase_iter_count)
         
         # 显示最终状态
         final_total_iterations = get_total_iterations()
@@ -237,8 +296,8 @@ if __name__ == "__main__":
     parser.add_argument(
         '--n_iter', 
         type=int, 
-        default=5,
-        help="Number of optimization iterations (default: 5)"
+        default=50,
+        help="Number of optimization iterations (default: 50)"
     )
     parser.add_argument(
         '--phase',

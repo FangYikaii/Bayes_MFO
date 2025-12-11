@@ -5,6 +5,9 @@ import uvicorn
 import os
 import sys
 from datetime import datetime
+import pandas as pd
+import numpy as np
+import torch
 
 # 添加项目路径以便导入模型
 project_root = os.path.abspath(os.path.dirname(__file__))
@@ -84,6 +87,78 @@ class OptimizeStepRequest(BaseModel):
     simulation_flag: bool = True
     total_iterations: int = 5  # 用于前端显示总迭代次数
 
+def save_recommended_parameters(candidates, optimizer, phase_name, phase_iteration, global_iteration, output_dir):
+    """
+    保存推荐的参数到 CSV 文件（按阶段分文件保存）
+    
+    Args:
+        candidates: 推荐的参数，torch.Tensor 或 numpy.ndarray，shape 为 (n_candidates, n_params)
+        optimizer: TraceAwareKGOptimizer 实例
+        phase_name: 阶段名称
+        phase_iteration: 当前阶段的迭代次数
+        global_iteration: 全局迭代次数
+        output_dir: 输出目录
+    """
+    try:
+        # 确保输出目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 转换 candidates 为 numpy 数组
+        if isinstance(candidates, torch.Tensor):
+            candidates_np = candidates.cpu().numpy()
+        else:
+            candidates_np = np.array(candidates)
+        
+        # 如果没有推荐的参数，跳过保存
+        if candidates_np.shape[0] == 0:
+            print(f"【WARNING】阶段 {phase_name} 迭代 {phase_iteration} 没有推荐的参数可保存")
+            return
+        
+        # 获取参数名称
+        param_names = optimizer.param_names
+        
+        # 创建 DataFrame
+        data_dict = {}
+        for i, param_name in enumerate(param_names):
+            if i < candidates_np.shape[1]:
+                data_dict[param_name] = candidates_np[:, i]
+            else:
+                # 如果参数索引超出范围，填充 NaN
+                data_dict[param_name] = [np.nan] * candidates_np.shape[0]
+        
+        # 添加元数据
+        data_dict['Phase'] = [phase_name] * candidates_np.shape[0]
+        data_dict['Phase_Iteration'] = [phase_iteration] * candidates_np.shape[0]
+        data_dict['Global_Iteration'] = [global_iteration] * candidates_np.shape[0]
+        data_dict['Timestamp'] = [datetime.now().strftime("%Y-%m-%d %H:%M:%S")] * candidates_np.shape[0]
+        data_dict['Candidate_Index'] = list(range(candidates_np.shape[0]))
+        
+        df = pd.DataFrame(data_dict)
+        
+        # 构建文件名：按阶段分文件，追加模式
+        phase_file_map = {
+            OptimizerManager.PHASE_1_OXIDE: 'phase_1_oxide_recommended_params.csv',
+            OptimizerManager.PHASE_1_ORGANIC: 'phase_1_organic_recommended_params.csv',
+            OptimizerManager.PHASE_2: 'phase_2_recommended_params.csv'
+        }
+        
+        filename = phase_file_map.get(phase_name, f'{phase_name}_recommended_params.csv')
+        filepath = os.path.join(output_dir, filename)
+        
+        # 追加到 CSV 文件（如果文件已存在则追加，否则创建新文件）
+        if os.path.exists(filepath):
+            df.to_csv(filepath, mode='a', header=False, index=False, encoding='utf-8-sig')
+            print(f"【INFO】推荐的参数已追加到: {filepath} (阶段: {phase_name}, 迭代: {phase_iteration}, 候选数: {candidates_np.shape[0]})")
+        else:
+            df.to_csv(filepath, mode='w', header=True, index=False, encoding='utf-8-sig')
+            print(f"【INFO】推荐的参数已保存到: {filepath} (阶段: {phase_name}, 迭代: {phase_iteration}, 候选数: {candidates_np.shape[0]})")
+            
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"【ERROR】保存推荐参数失败: {str(e)}")
+        print(f"【ERROR】Traceback: {error_trace}")
+
 # 运行单步优化迭代
 @app.post("/api/optimize/step")
 async def optimize_step(request: OptimizeStepRequest):
@@ -109,6 +184,24 @@ async def optimize_step(request: OptimizeStepRequest):
         current_phase = result['phase']
         phase_iteration = result['phase_iteration']
         should_switch_phase = result['should_switch_phase']
+        
+        # 保存推荐的参数到 CSV 文件（每次迭代后保存）
+        candidates = result.get('candidates')
+        if candidates is not None:
+            # 判断是否是初始样本生成（iteration == 0）
+            is_initial_samples = result.get('iteration', 0) == 0
+            if not is_initial_samples:
+                # 只有真正的迭代才保存推荐的参数（初始样本生成不算迭代）
+                # 计算全局迭代次数
+                global_iteration = result.get('iteration', phase_iteration)
+                save_recommended_parameters(
+                    candidates=candidates,
+                    optimizer=optimizer,
+                    phase_name=current_phase,
+                    phase_iteration=phase_iteration,
+                    global_iteration=global_iteration,
+                    output_dir=os.path.join(project_root, 'data', 'output')
+                )
         
         # 计算总迭代次数（所有阶段的迭代次数总和）
         total_iterations = sum(global_optimizer_manager.phase_iterations.values())
