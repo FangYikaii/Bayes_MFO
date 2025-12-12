@@ -133,9 +133,9 @@ class DatabaseManager:
                 # 确保i+1不超过batch_num
                 exp_id = i + 1 if (i + 1) <= batch_num else batch_num
                 
-                # 根据阶段构建不同的插入语句，缺失的参数设为默认值
+                # 根据阶段构建不同的插入语句
                 if phase == OptimizerManager.PHASE_1_OXIDE:
-                    # Phase 1 Oxide: 只插入金属参数，有机物参数设为默认值
+                    # Phase 1 Oxide: 只插入金属参数，有机物参数设为NULL
                     cursor.execute(f'''
                     INSERT INTO {self.TABLE_NAME} (
                         ExpID, ProjName, IterId, Phase,
@@ -144,12 +144,12 @@ class DatabaseManager:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         exp_id, proj_name, iter_id, phase,
-                        1, 0.1, 25, 1, 7.0, 20,  # 默认有机物参数
+                        None, None, None, None, None, None,  # 有机物参数设为NULL
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), int(round(sample[3])),
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_1_ORGANIC:
-                    # Phase 1 Organic: 只插入有机物参数，金属参数设为默认值
+                    # Phase 1 Organic: 只插入有机物参数，金属参数设为NULL
                     cursor.execute(f'''
                     INSERT INTO {self.TABLE_NAME} (
                         ExpID, ProjName, IterId, Phase,
@@ -160,7 +160,7 @@ class DatabaseManager:
                         exp_id, proj_name, iter_id, phase,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
-                        1, 30, 0, 5,  # 默认金属参数
+                        None, None, None, None,  # 金属参数设为NULL
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_2:
