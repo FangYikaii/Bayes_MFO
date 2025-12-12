@@ -21,8 +21,8 @@ class DatabaseManager:
     
     # 定义各阶段对应的表名
     PHASE_TABLE_MAP = {
-        'phase_1_oxide': 'BayesExperData_Phase1Oxide',
-        'phase_1_organic': 'BayesExperData_Phase1Organic',
+        'phase_1_oxide': 'BayesExperData_Phase1_Oxide',
+        'phase_1_organic': 'BayesExperData_Phase1_Organic',
         'phase_2': 'BayesExperData_Phase2'
     }
     
@@ -403,13 +403,13 @@ class DatabaseManager:
                        NULL as SoakTime, NULL as PH, NULL as CuringTime,
                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
                        Coverage, Uniformity, Adhesion, Phase
-                FROM BayesExperData_Phase1Oxide
+                FROM BayesExperData_Phase1_Oxide
                 WHERE ProjName = ?
                 UNION ALL
                 SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                        NULL as MetalAType, NULL as MetalAConc, NULL as MetalBType, NULL as MetalMolarRatio,
                        Coverage, Uniformity, Adhesion, Phase
-                FROM BayesExperData_Phase1Organic
+                FROM BayesExperData_Phase1_Organic
                 WHERE ProjName = ?
                 UNION ALL
                 SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
