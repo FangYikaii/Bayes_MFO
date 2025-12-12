@@ -139,52 +139,49 @@ class DatabaseManager:
                 # 根据阶段构建不同的插入语句
                 if phase == OptimizerManager.PHASE_1_OXIDE:
                     # Phase 1 Oxide: 只插入金属参数，有机物参数设为NULL
+                    # IsRunning, DataCheck, Barcode 使用表定义的默认值
                     cursor.execute(f'''
                     INSERT INTO {self.TABLE_NAME} (
                         ExpID, ProjName, IterId, Phase,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                        IsRunning, DataCheck, Barcode, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         exp_id, proj_name, iter_id, phase,
                         None, None, None, None, None, None,  # 有机物参数设为NULL
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), int(round(sample[3])),
-                        0, 0, None,  # IsRunning=0(false), DataCheck=0(false), Barcode=NULL
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_1_ORGANIC:
                     # Phase 1 Organic: 只插入有机物参数，金属参数设为NULL
+                    # IsRunning, DataCheck, Barcode 使用表定义的默认值
                     cursor.execute(f'''
                     INSERT INTO {self.TABLE_NAME} (
                         ExpID, ProjName, IterId, Phase,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                        IsRunning, DataCheck, Barcode, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         exp_id, proj_name, iter_id, phase,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
                         None, None, None, None,  # 金属参数设为NULL
-                        0, 0, None,  # IsRunning=0(false), DataCheck=0(false), Barcode=NULL
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_2:
                     # Phase 2: 插入所有参数
+                    # IsRunning, DataCheck, Barcode 使用表定义的默认值
                     cursor.execute(f'''
                     INSERT INTO {self.TABLE_NAME} (
                         ExpID, ProjName, IterId, Phase,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                        IsRunning, DataCheck, Barcode, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         exp_id, proj_name, iter_id, phase,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
                         int(round(sample[6])), float(sample[7]), int(round(sample[8])), int(round(sample[9])),
-                        0, 0, None,  # IsRunning=0(false), DataCheck=0(false), Barcode=NULL
                         create_time
                     ))
             
