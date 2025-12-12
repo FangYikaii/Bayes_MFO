@@ -422,6 +422,8 @@ class BayesianOptimizationAlgorithm:
         """
         # 获取当前阶段的优化器
         optimizer = self.manager.get_current_optimizer()
+
+
         
         if len(experiment_data) == 0:
             print(f"【ERROR】No experiment data found for phase '{self.current_phase}'")
