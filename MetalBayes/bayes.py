@@ -416,8 +416,9 @@ class BayesOptimizationService:
     """接口业务逻辑类，负责处理具体的业务逻辑和调用其他类"""
     
     def __init__(self, db_path=None, device='cpu', seed=42, proj_name=None):
+        # 固定数据库路径
         if db_path is None:
-            db_path = os.path.join(project_root, 'data', 'sampleData.db')
+            db_path = r"D:\Parameter\Meta\DB\sampleData.db"
         
         self.db_manager = DatabaseManager(db_path)
         
