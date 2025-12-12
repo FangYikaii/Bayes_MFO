@@ -618,20 +618,21 @@ class BayesOptimizationService:
         # 切换到指定阶段
         self.optimizer.switch_phase(phase)
         
-        # 区分处理初始样本(iter_id=1)和迭代样本(iter_id>1)
-        if iter_id == 1:
-            # 生成初始样本
+        # 检查当前阶段是否已有数据（判断是否是当前阶段的第一次迭代）
+        experiment_data = self.db_manager.get_experiment_data(proj_name, phase=phase)
+        is_phase_first_iteration = len(experiment_data) == 0
+        
+        if is_phase_first_iteration:
+            # 当前阶段的第一次迭代，生成初始样本
             samples = self.optimizer.generate_initial_samples(phase=phase, n_samples=batch_size)
-            print(f"【INFO】Generating initial samples for project '{proj_name}', phase '{phase}'")
+            print(f"【INFO】Generating initial samples for project '{proj_name}', phase '{phase}' (phase first iteration)")
         else:
-            # 检查上一批次实验数据是否已回传
+            # 不是当前阶段的第一次迭代，需要检查上一批次实验数据是否已回传
             if algo_recev_id != iter_id - 1:
                 print(f"【ERROR】Experiment data for iteration {iter_id - 1} not received yet")
                 return False
             
-            # 从数据库读取历史数据
-            experiment_data = self.db_manager.get_experiment_data(proj_name, phase=phase)
-            
+            # 从数据库读取历史数据（当前阶段的数据）
             if len(experiment_data) == 0:
                 print(f"【ERROR】No experiment data found for project '{proj_name}', phase '{phase}'")
                 return False
