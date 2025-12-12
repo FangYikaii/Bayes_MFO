@@ -85,7 +85,6 @@ class DatabaseManager:
                     ExpID INTEGER NOT NULL,
                     ProjName VARCHAR(255) NOT NULL,
                     IterId INTEGER NOT NULL,
-                    Phase VARCHAR(50),
                     MetalAType INTEGER NOT NULL,
                     MetalAConc REAL NOT NULL,
                     MetalBType INTEGER NOT NULL,
@@ -105,7 +104,6 @@ class DatabaseManager:
                     ExpID INTEGER NOT NULL,
                     ProjName VARCHAR(255) NOT NULL,
                     IterId INTEGER NOT NULL,
-                    Phase VARCHAR(50),
                     Formula INTEGER NOT NULL,
                     Concentration REAL NOT NULL,
                     Temperature INTEGER NOT NULL,
@@ -127,7 +125,6 @@ class DatabaseManager:
                     ExpID INTEGER NOT NULL,
                     ProjName VARCHAR(255) NOT NULL,
                     IterId INTEGER NOT NULL,
-                    Phase VARCHAR(50),
                     Formula INTEGER NOT NULL,
                     Concentration REAL NOT NULL,
                     Temperature INTEGER NOT NULL,
@@ -205,11 +202,11 @@ class DatabaseManager:
                     # Phase 1 Oxide: 只插入金属参数
                     cursor.execute(f'''
                     INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId, Phase,
+                        ExpID, ProjName, IterId,
                         MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id, phase,
+                        exp_id, proj_name, iter_id,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), int(round(sample[3])),
                         create_time
                     ))
@@ -217,11 +214,11 @@ class DatabaseManager:
                     # Phase 1 Organic: 只插入有机物参数
                     cursor.execute(f'''
                     INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId, Phase,
+                        ExpID, ProjName, IterId,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id, phase,
+                        exp_id, proj_name, iter_id,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
                         create_time
@@ -230,12 +227,12 @@ class DatabaseManager:
                     # Phase 2: 插入所有参数
                     cursor.execute(f'''
                     INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId, Phase,
+                        ExpID, ProjName, IterId,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                         MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id, phase,
+                        exp_id, proj_name, iter_id,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
                         int(round(sample[6])), float(sample[7]), int(round(sample[8])), int(round(sample[9])),
@@ -374,7 +371,7 @@ class DatabaseManager:
                     SELECT NULL as Formula, NULL as Concentration, NULL as Temperature, 
                            NULL as SoakTime, NULL as PH, NULL as CuringTime,
                            MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion, Phase
+                           Coverage, Uniformity, Adhesion
                     FROM {table_name} 
                     WHERE ProjName = ?
                     ''', (proj_name,))
@@ -383,7 +380,7 @@ class DatabaseManager:
                     cursor.execute(f'''
                     SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                            NULL as MetalAType, NULL as MetalAConc, NULL as MetalBType, NULL as MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion, Phase
+                           Coverage, Uniformity, Adhesion
                     FROM {table_name} 
                     WHERE ProjName = ?
                     ''', (proj_name,))
@@ -392,7 +389,7 @@ class DatabaseManager:
                     cursor.execute(f'''
                     SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                            MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion, Phase
+                           Coverage, Uniformity, Adhesion
                     FROM {table_name} 
                     WHERE ProjName = ?
                     ''', (proj_name,))
@@ -402,19 +399,19 @@ class DatabaseManager:
                 SELECT NULL as Formula, NULL as Concentration, NULL as Temperature, 
                        NULL as SoakTime, NULL as PH, NULL as CuringTime,
                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion, Phase
+                       Coverage, Uniformity, Adhesion
                 FROM BayesExperData_Phase1_Oxide
                 WHERE ProjName = ?
                 UNION ALL
                 SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                        NULL as MetalAType, NULL as MetalAConc, NULL as MetalBType, NULL as MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion, Phase
+                       Coverage, Uniformity, Adhesion
                 FROM BayesExperData_Phase1_Organic
                 WHERE ProjName = ?
                 UNION ALL
                 SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion, Phase
+                       Coverage, Uniformity, Adhesion
                 FROM BayesExperData_Phase2
                 WHERE ProjName = ?
                 ''', (proj_name, proj_name, proj_name))
@@ -530,11 +527,12 @@ class BayesianOptimizationAlgorithm:
         
         for row in experiment_data:
             # 根据阶段提取参数
+            # row 格式（统一格式，缺失字段为NULL）:
+            # Formula(0), Concentration(1), Temperature(2), SoakTime(3), PH(4), CuringTime(5),
+            # MetalAType(6), MetalAConc(7), MetalBType(8), MetalMolarRatio(9),
+            # Coverage(10), Uniformity(11), Adhesion(12)
             if phase == OptimizerManager.PHASE_1_OXIDE:
                 # Phase 1 Oxide: 只有金属参数
-                # row: Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                #      MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                #      Coverage, Uniformity, Adhesion, Phase
                 x = [row[6], row[7], row[8], row[9]]  # MetalAType, MetalAConc, MetalBType, MetalMolarRatio
             elif phase == OptimizerManager.PHASE_1_ORGANIC:
                 # Phase 1 Organic: 只有有机物参数
@@ -547,8 +545,8 @@ class BayesianOptimizationAlgorithm:
                 print(f"【ERROR】Unknown phase: {phase}")
                 continue
             
-            # 目标值：Coverage, Uniformity, Adhesion
-            y = [row[11], row[12], row[10]]  # Uniformity, Adhesion, Coverage (注意顺序)
+            # 目标值：Uniformity, Coverage, Adhesion (与TkgOptimizer期望的顺序一致)
+            y = [row[11], row[10], row[12]]  # Uniformity, Coverage, Adhesion
             
             X.append(x)
             Y.append(y)
