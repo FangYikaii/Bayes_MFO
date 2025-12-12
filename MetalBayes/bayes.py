@@ -211,53 +211,90 @@ class DatabaseManager:
             for data in exp_data:
                 # 根据阶段构建更新条件
                 phase = data.get('Phase', OptimizerManager.PHASE_2)
+                exp_id = data.get('ExpID')  # 获取ExpID用于精确匹配
                 
                 if phase == OptimizerManager.PHASE_1_OXIDE:
-                    # Phase 1 Oxide: 使用金属参数作为匹配条件
-                    cursor.execute(f'''
-                    UPDATE {self.TABLE_NAME} 
-                    SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
-                      AND MetalAType = ? AND MetalAConc = ? 
-                      AND MetalBType = ? AND MetalMolarRatio = ?
-                    ''', (
-                        data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id, phase,
-                        data.get('MetalAType'), data.get('MetalAConc'),
-                        data.get('MetalBType'), data.get('MetalMolarRatio')
-                    ))
+                    # Phase 1 Oxide: 使用ExpID和金属参数作为匹配条件
+                    if exp_id is not None:
+                        # 如果提供了ExpID，使用主键精确匹配
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ExpID = ? AND ProjName = ? AND IterId = ? AND Phase = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            exp_id, proj_name, iter_id, phase
+                        ))
+                    else:
+                        # 如果没有ExpID，使用金属参数作为匹配条件
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ProjName = ? AND IterId = ? AND Phase = ?
+                          AND MetalAType = ? AND MetalAConc = ? 
+                          AND MetalBType = ? AND MetalMolarRatio = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            proj_name, iter_id, phase,
+                            data.get('MetalAType'), data.get('MetalAConc'),
+                            data.get('MetalBType'), data.get('MetalMolarRatio')
+                        ))
                 elif phase == OptimizerManager.PHASE_1_ORGANIC:
-                    # Phase 1 Organic: 使用有机物参数作为匹配条件
-                    cursor.execute(f'''
-                    UPDATE {self.TABLE_NAME} 
-                    SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
-                      AND Formula = ? AND Concentration = ? 
-                      AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
-                    ''', (
-                        data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id, phase,
-                        data.get('Formula'), data.get('Concentration'), 
-                        data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime')
-                    ))
+                    # Phase 1 Organic: 使用ExpID和有机物参数作为匹配条件
+                    if exp_id is not None:
+                        # 如果提供了ExpID，使用主键精确匹配
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ExpID = ? AND ProjName = ? AND IterId = ? AND Phase = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            exp_id, proj_name, iter_id, phase
+                        ))
+                    else:
+                        # 如果没有ExpID，使用有机物参数作为匹配条件
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ProjName = ? AND IterId = ? AND Phase = ?
+                          AND Formula = ? AND Concentration = ? 
+                          AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            proj_name, iter_id, phase,
+                            data.get('Formula'), data.get('Concentration'), 
+                            data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime')
+                        ))
                 elif phase == OptimizerManager.PHASE_2:
-                    # Phase 2: 使用所有参数作为匹配条件
-                    cursor.execute(f'''
-                    UPDATE {self.TABLE_NAME} 
-                    SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
-                      AND Formula = ? AND Concentration = ? 
-                      AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
-                      AND MetalAType = ? AND MetalAConc = ? 
-                      AND MetalBType = ? AND MetalMolarRatio = ?
-                    ''', (
-                        data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id, phase,
-                        data.get('Formula'), data.get('Concentration'), 
-                        data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime'),
-                        data.get('MetalAType'), data.get('MetalAConc'),
-                        data.get('MetalBType'), data.get('MetalMolarRatio')
-                    ))
+                    # Phase 2: 使用ExpID和所有参数作为匹配条件
+                    if exp_id is not None:
+                        # 如果提供了ExpID，使用主键精确匹配
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ExpID = ? AND ProjName = ? AND IterId = ? AND Phase = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            exp_id, proj_name, iter_id, phase
+                        ))
+                    else:
+                        # 如果没有ExpID，使用所有参数作为匹配条件
+                        cursor.execute(f'''
+                        UPDATE {self.TABLE_NAME} 
+                        SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
+                        WHERE ProjName = ? AND IterId = ? AND Phase = ?
+                          AND Formula = ? AND Concentration = ? 
+                          AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
+                          AND MetalAType = ? AND MetalAConc = ? 
+                          AND MetalBType = ? AND MetalMolarRatio = ?
+                        ''', (
+                            data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
+                            proj_name, iter_id, phase,
+                            data.get('Formula'), data.get('Concentration'), 
+                            data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime'),
+                            data.get('MetalAType'), data.get('MetalAConc'),
+                            data.get('MetalBType'), data.get('MetalMolarRatio')
+                        ))
             
             # 更新AlgoRecevId表示该批次参数已回传成功
             cursor.execute('''
