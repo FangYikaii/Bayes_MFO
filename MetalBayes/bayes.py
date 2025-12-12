@@ -87,7 +87,7 @@ class DatabaseManager:
                 Adhesion REAL,
                 CreateTime VARCHAR(255),
                 UpdateTime VARCHAR(255),
-                PRIMARY KEY (ExpID, ProjName, IterId)
+                PRIMARY KEY (ExpID, ProjName, IterId, Phase)
             )
         ''')
     
