@@ -255,8 +255,7 @@ class TraceAwareKGOptimizer:
                 options={"batch_limit": 5, "maxiter": 200, "seed": self.seed},
                 sequential=True
             )
-            # 测试异常
-            raise ValueError("测试异常：用于测试错误处理逻辑")
+
             # 检查候选点相似度（在归一化空间）
             if self.X.shape[0] > 0:
                 with torch.no_grad():
