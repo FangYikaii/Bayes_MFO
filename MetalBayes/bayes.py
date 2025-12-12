@@ -19,17 +19,13 @@ from src.TkgOptimizer import TraceAwareKGOptimizer
 class DatabaseManager:
     """数据库交互类，负责所有与SQLite数据库相关的操作"""
     
-    # 定义各阶段对应的表名
-    PHASE_TABLE_MAP = {
-        'phase_1_oxide': 'BayesExperData_Phase1_Oxide',
-        'phase_1_organic': 'BayesExperData_Phase1_Organic',
-        'phase_2': 'BayesExperData_Phase2'
-    }
+    # 统一使用一张表
+    TABLE_NAME = 'BayesExperData'
     
     def __init__(self, db_path):
         self.db_path = db_path
-        # 初始化时创建所有阶段的表（如果不存在）
-        self._ensure_tables_exist()
+        # 初始化时创建表（如果不存在）
+        self._ensure_table_exists()
     
     def _get_connection(self):
         """获取数据库连接"""
@@ -40,111 +36,60 @@ class DatabaseManager:
             print(f"【ERROR】Database connection failed: {e}")
             raise
     
-    def _get_table_name(self, phase):
-        """根据阶段获取对应的表名"""
-        return self.PHASE_TABLE_MAP.get(phase, None)
-    
-    def _ensure_tables_exist(self):
-        """确保所有阶段的表都存在，如果不存在则创建"""
+    def _ensure_table_exists(self):
+        """确保表存在，如果不存在则创建"""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             
-            # 为每个阶段创建表
-            for phase, table_name in self.PHASE_TABLE_MAP.items():
-                # 检查表是否存在
-                cursor.execute('''
-                    SELECT name FROM sqlite_master 
-                    WHERE type='table' AND name=?
-                ''', (table_name,))
-                
-                if cursor.fetchone() is None:
-                    # 表不存在，创建表
-                    self._create_table(cursor, table_name, phase)
-                    print(f"【INFO】Created table: {table_name}")
+            # 检查表是否存在
+            cursor.execute('''
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name=?
+            ''', (self.TABLE_NAME,))
+            
+            if cursor.fetchone() is None:
+                # 表不存在，创建表（包含所有字段）
+                self._create_table(cursor)
+                print(f"【INFO】Created table: {self.TABLE_NAME}")
             
             conn.commit()
         except sqlite3.Error as e:
-            print(f"【ERROR】Failed to ensure tables exist: {e}")
+            print(f"【ERROR】Failed to ensure table exists: {e}")
             conn.rollback()
         finally:
             conn.close()
     
-    def _create_table(self, cursor, table_name, phase):
-        """创建指定阶段的表，每个阶段有不同的表结构对应自己的参数空间
+    def _create_table(self, cursor):
+        """创建表，包含所有字段和Phase字段
         
         Args:
             cursor: 数据库游标
-            table_name: 表名
-            phase: 阶段名称
         """
-        if phase == OptimizerManager.PHASE_1_OXIDE:
-            # Phase 1 Oxide: 只包含金属参数
-            cursor.execute(f'''
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    ExpID INTEGER NOT NULL,
-                    ProjName VARCHAR(255) NOT NULL,
-                    IterId INTEGER NOT NULL,
-                    MetalAType INTEGER NOT NULL,
-                    MetalAConc REAL NOT NULL,
-                    MetalBType INTEGER NOT NULL,
-                    MetalMolarRatio INTEGER NOT NULL,
-                    Coverage REAL,
-                    Uniformity REAL,
-                    Adhesion REAL,
-                    CreateTime VARCHAR(255),
-                    UpdateTime VARCHAR(255),
-                    PRIMARY KEY (ExpID, ProjName, IterId)
-                )
-            ''')
-        elif phase == OptimizerManager.PHASE_1_ORGANIC:
-            # Phase 1 Organic: 只包含有机物参数
-            cursor.execute(f'''
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    ExpID INTEGER NOT NULL,
-                    ProjName VARCHAR(255) NOT NULL,
-                    IterId INTEGER NOT NULL,
-                    Formula INTEGER NOT NULL,
-                    Concentration REAL NOT NULL,
-                    Temperature INTEGER NOT NULL,
-                    SoakTime INTEGER NOT NULL,
-                    PH REAL NOT NULL,
-                    CuringTime INTEGER NOT NULL,
-                    Coverage REAL,
-                    Uniformity REAL,
-                    Adhesion REAL,
-                    CreateTime VARCHAR(255),
-                    UpdateTime VARCHAR(255),
-                    PRIMARY KEY (ExpID, ProjName, IterId)
-                )
-            ''')
-        elif phase == OptimizerManager.PHASE_2:
-            # Phase 2: 包含所有参数
-            cursor.execute(f'''
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    ExpID INTEGER NOT NULL,
-                    ProjName VARCHAR(255) NOT NULL,
-                    IterId INTEGER NOT NULL,
-                    Formula INTEGER NOT NULL,
-                    Concentration REAL NOT NULL,
-                    Temperature INTEGER NOT NULL,
-                    SoakTime INTEGER NOT NULL,
-                    PH REAL NOT NULL,
-                    CuringTime INTEGER NOT NULL,
-                    MetalAType INTEGER NOT NULL,
-                    MetalAConc REAL NOT NULL,
-                    MetalBType INTEGER NOT NULL,
-                    MetalMolarRatio INTEGER NOT NULL,
-                    Coverage REAL,
-                    Uniformity REAL,
-                    Adhesion REAL,
-                    CreateTime VARCHAR(255),
-                    UpdateTime VARCHAR(255),
-                    PRIMARY KEY (ExpID, ProjName, IterId)
-                )
-            ''')
-        else:
-            raise ValueError(f"Unknown phase: {phase}")
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
+                ExpID INTEGER NOT NULL,
+                ProjName VARCHAR(255) NOT NULL,
+                IterId INTEGER NOT NULL,
+                Phase VARCHAR(50) NOT NULL,
+                Formula INTEGER,
+                Concentration REAL,
+                Temperature INTEGER,
+                SoakTime INTEGER,
+                PH REAL,
+                CuringTime INTEGER,
+                MetalAType INTEGER,
+                MetalAConc REAL,
+                MetalBType INTEGER,
+                MetalMolarRatio INTEGER,
+                Coverage REAL,
+                Uniformity REAL,
+                Adhesion REAL,
+                CreateTime VARCHAR(255),
+                UpdateTime VARCHAR(255),
+                PRIMARY KEY (ExpID, ProjName, IterId)
+            )
+        ''')
     
     def get_project(self, proj_name):
         """获取项目信息，返回字典格式便于通过列名访问"""
@@ -170,19 +115,10 @@ class DatabaseManager:
             phase: 当前阶段 ('phase_1_oxide', 'phase_1_organic', 'phase_2')
             is_initial: 是否为初始样本
         """
-        # 获取对应阶段的表名
-        table_name = self._get_table_name(phase)
-        if not table_name:
-            print(f"【ERROR】Unknown phase: {phase}")
-            return False
-        
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             create_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 确保表存在
-            self._ensure_table_exists(cursor, table_name, phase)
             
             # 获取项目的BatchNum值
             cursor.execute("SELECT BatchNum FROM AlgoProjInfo WHERE ProjName = ?", (proj_name,))
@@ -197,42 +133,46 @@ class DatabaseManager:
                 # 确保i+1不超过batch_num
                 exp_id = i + 1 if (i + 1) <= batch_num else batch_num
                 
-                # 根据阶段构建不同的插入语句，只插入对应阶段的参数
+                # 根据阶段构建不同的插入语句，缺失的参数设为默认值
                 if phase == OptimizerManager.PHASE_1_OXIDE:
-                    # Phase 1 Oxide: 只插入金属参数
+                    # Phase 1 Oxide: 只插入金属参数，有机物参数设为默认值
                     cursor.execute(f'''
-                    INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId,
+                    INSERT INTO {self.TABLE_NAME} (
+                        ExpID, ProjName, IterId, Phase,
+                        Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                         MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id,
+                        exp_id, proj_name, iter_id, phase,
+                        1, 0.1, 25, 1, 7.0, 20,  # 默认有机物参数
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), int(round(sample[3])),
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_1_ORGANIC:
-                    # Phase 1 Organic: 只插入有机物参数
+                    # Phase 1 Organic: 只插入有机物参数，金属参数设为默认值
                     cursor.execute(f'''
-                    INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId,
-                        Formula, Concentration, Temperature, SoakTime, PH, CuringTime, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO {self.TABLE_NAME} (
+                        ExpID, ProjName, IterId, Phase,
+                        Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
+                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id,
+                        exp_id, proj_name, iter_id, phase,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
+                        1, 30, 0, 5,  # 默认金属参数
                         create_time
                     ))
                 elif phase == OptimizerManager.PHASE_2:
                     # Phase 2: 插入所有参数
                     cursor.execute(f'''
-                    INSERT INTO {table_name} (
-                        ExpID, ProjName, IterId,
+                    INSERT INTO {self.TABLE_NAME} (
+                        ExpID, ProjName, IterId, Phase,
                         Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                         MetalAType, MetalAConc, MetalBType, MetalMolarRatio, CreateTime
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        exp_id, proj_name, iter_id,
+                        exp_id, proj_name, iter_id, phase,
                         int(round(sample[0])), float(sample[1]), int(round(sample[2])), 
                         int(round(sample[3])), float(sample[4]), int(round(sample[5])),
                         int(round(sample[6])), float(sample[7]), int(round(sample[8])), int(round(sample[9])),
@@ -255,16 +195,6 @@ class DatabaseManager:
         finally:
             conn.close()
     
-    def _ensure_table_exists(self, cursor, table_name, phase):
-        """确保指定表存在，如果不存在则创建"""
-        cursor.execute('''
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name=?
-        ''', (table_name,))
-        
-        if cursor.fetchone() is None:
-            self._create_table(cursor, table_name, phase)
-    
     def update_experiment_data(self, proj_name, iter_id, exp_data):
         """更新实验数据"""
         conn = self._get_connection()
@@ -276,53 +206,47 @@ class DatabaseManager:
                 # 根据阶段构建更新条件
                 phase = data.get('Phase', OptimizerManager.PHASE_2)
                 
-                # 获取对应阶段的表名
-                table_name = self._get_table_name(phase)
-                if not table_name:
-                    print(f"【ERROR】Unknown phase: {phase}")
-                    continue
-                
                 if phase == OptimizerManager.PHASE_1_OXIDE:
                     # Phase 1 Oxide: 使用金属参数作为匹配条件
                     cursor.execute(f'''
-                    UPDATE {table_name} 
+                    UPDATE {self.TABLE_NAME} 
                     SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ?
+                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
                       AND MetalAType = ? AND MetalAConc = ? 
                       AND MetalBType = ? AND MetalMolarRatio = ?
                     ''', (
                         data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id,
+                        proj_name, iter_id, phase,
                         data.get('MetalAType'), data.get('MetalAConc'),
                         data.get('MetalBType'), data.get('MetalMolarRatio')
                     ))
                 elif phase == OptimizerManager.PHASE_1_ORGANIC:
                     # Phase 1 Organic: 使用有机物参数作为匹配条件
                     cursor.execute(f'''
-                    UPDATE {table_name} 
+                    UPDATE {self.TABLE_NAME} 
                     SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ?
+                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
                       AND Formula = ? AND Concentration = ? 
                       AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
                     ''', (
                         data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id,
+                        proj_name, iter_id, phase,
                         data.get('Formula'), data.get('Concentration'), 
                         data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime')
                     ))
                 elif phase == OptimizerManager.PHASE_2:
                     # Phase 2: 使用所有参数作为匹配条件
                     cursor.execute(f'''
-                    UPDATE {table_name} 
+                    UPDATE {self.TABLE_NAME} 
                     SET Coverage = ?, Adhesion = ?, Uniformity = ?, UpdateTime = ?
-                    WHERE ProjName = ? AND IterId = ?
+                    WHERE ProjName = ? AND IterId = ? AND Phase = ?
                       AND Formula = ? AND Concentration = ? 
                       AND Temperature = ? AND SoakTime = ? AND PH = ? AND CuringTime = ?
                       AND MetalAType = ? AND MetalAConc = ? 
                       AND MetalBType = ? AND MetalMolarRatio = ?
                     ''', (
                         data.get('Coverage'), data.get('Adhesion'), data.get('Uniformity'), update_time,
-                        proj_name, iter_id,
+                        proj_name, iter_id, phase,
                         data.get('Formula'), data.get('Concentration'), 
                         data.get('Temperature'), data.get('SoakTime'), data.get('PH'), data.get('CuringTime'),
                         data.get('MetalAType'), data.get('MetalAConc'),
@@ -350,71 +274,32 @@ class DatabaseManager:
         
         Args:
             proj_name: 项目名称
-            phase: 阶段名称，如果为None则获取所有阶段的数据（使用UNION合并）
+            phase: 阶段名称，如果为None则获取所有阶段的数据
         
         Returns:
-            返回统一格式的数据，包含所有字段（缺失字段用NULL填充）
+            返回统一格式的数据，包含所有字段
         """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             if phase:
                 # 获取指定阶段的数据
-                table_name = self._get_table_name(phase)
-                if not table_name:
-                    print(f"【ERROR】Unknown phase: {phase}")
-                    return []
-                
-                if phase == OptimizerManager.PHASE_1_OXIDE:
-                    # Phase 1 Oxide: 只查询金属参数，有机物参数用NULL填充
-                    cursor.execute(f'''
-                    SELECT NULL as Formula, NULL as Concentration, NULL as Temperature, 
-                           NULL as SoakTime, NULL as PH, NULL as CuringTime,
-                           MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion
-                    FROM {table_name} 
-                    WHERE ProjName = ?
-                    ''', (proj_name,))
-                elif phase == OptimizerManager.PHASE_1_ORGANIC:
-                    # Phase 1 Organic: 只查询有机物参数，金属参数用NULL填充
-                    cursor.execute(f'''
-                    SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                           NULL as MetalAType, NULL as MetalAConc, NULL as MetalBType, NULL as MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion
-                    FROM {table_name} 
-                    WHERE ProjName = ?
-                    ''', (proj_name,))
-                elif phase == OptimizerManager.PHASE_2:
-                    # Phase 2: 查询所有参数
-                    cursor.execute(f'''
-                    SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                           MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                           Coverage, Uniformity, Adhesion
-                    FROM {table_name} 
-                    WHERE ProjName = ?
-                    ''', (proj_name,))
+                cursor.execute(f'''
+                SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
+                       MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
+                       Coverage, Uniformity, Adhesion, Phase
+                FROM {self.TABLE_NAME} 
+                WHERE ProjName = ? AND Phase = ?
+                ''', (proj_name, phase))
             else:
-                # 获取所有阶段的数据，使用UNION合并，统一字段顺序
-                cursor.execute('''
-                SELECT NULL as Formula, NULL as Concentration, NULL as Temperature, 
-                       NULL as SoakTime, NULL as PH, NULL as CuringTime,
-                       MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion
-                FROM BayesExperData_Phase1_Oxide
-                WHERE ProjName = ?
-                UNION ALL
-                SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
-                       NULL as MetalAType, NULL as MetalAConc, NULL as MetalBType, NULL as MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion
-                FROM BayesExperData_Phase1_Organic
-                WHERE ProjName = ?
-                UNION ALL
+                # 获取所有阶段的数据
+                cursor.execute(f'''
                 SELECT Formula, Concentration, Temperature, SoakTime, PH, CuringTime,
                        MetalAType, MetalAConc, MetalBType, MetalMolarRatio,
-                       Coverage, Uniformity, Adhesion
-                FROM BayesExperData_Phase2
+                       Coverage, Uniformity, Adhesion, Phase
+                FROM {self.TABLE_NAME} 
                 WHERE ProjName = ?
-                ''', (proj_name, proj_name, proj_name))
+                ''', (proj_name,))
             return cursor.fetchall()
         finally:
             conn.close()
@@ -527,10 +412,10 @@ class BayesianOptimizationAlgorithm:
         
         for row in experiment_data:
             # 根据阶段提取参数
-            # row 格式（统一格式，缺失字段为NULL）:
+            # row 格式（统一格式，包含所有字段）:
             # Formula(0), Concentration(1), Temperature(2), SoakTime(3), PH(4), CuringTime(5),
             # MetalAType(6), MetalAConc(7), MetalBType(8), MetalMolarRatio(9),
-            # Coverage(10), Uniformity(11), Adhesion(12)
+            # Coverage(10), Uniformity(11), Adhesion(12), Phase(13)
             if phase == OptimizerManager.PHASE_1_OXIDE:
                 # Phase 1 Oxide: 只有金属参数
                 x = [row[6], row[7], row[8], row[9]]  # MetalAType, MetalAConc, MetalBType, MetalMolarRatio
